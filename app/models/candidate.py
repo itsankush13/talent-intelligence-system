@@ -30,4 +30,5 @@ class CandidateScore(BaseModel):
     semantic_similarity: float = 0.0
     bm25_score: float = 0.0
     bias_masked: bool = True
+    hiring_match_pct: float = 0.0   # add this line after bias_masked
     shortlist_reasoning: str = ""

@@ -1,5 +1,13 @@
 import streamlit as st
 import tempfile, os
+REC_ICON = {"STRONG HIRE":"🟢","HIRE":"🔵","MAYBE":"🟡","NO HIRE":"🔴"}
+def verdict_badge(rec: str) -> str:
+    if rec in ["STRONG HIRE", "HIRE"]:
+        return '<span style="background:#0f2d1f;color:#22c55e;border:1px solid #166534;padding:3px 10px;border-radius:20px;font-size:0.72rem;font-weight:700;font-family:monospace;">SUITABLE FOR HIRING</span>'
+    elif rec == "MAYBE":
+        return '<span style="background:#2d250f;color:#f59e0b;border:1px solid #92400e;padding:3px 10px;border-radius:20px;font-size:0.72rem;font-weight:700;font-family:monospace;">UNDER CONSIDERATION</span>'
+    else:
+        return '<span style="background:#2d0f0f;color:#ef4444;border:1px solid #991b1b;padding:3px 10px;border-radius:20px;font-size:0.72rem;font-weight:700;font-family:monospace;">NOT SUITABLE FOR HIRING</span>'
 from app.core.pipeline import run_pipeline
 from app.core.knowledge_graph import plot_multi_jd_graph
 from app.core.skill_gap_forecaster import compute_transferability
@@ -10,8 +18,9 @@ from app.core.email_sender import (
     ai_personalize_email, send_email,
 )
 from app.core.config import settings
+import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Talent Intelligence System", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Talent Intelligence System", page_icon="🔎", layout="wide")
 
 st.markdown("""
 <style>
@@ -64,7 +73,7 @@ div[data-testid="stExpander"] {
 """, unsafe_allow_html=True)
 
 # ── Hero ──────────────────────────────────────────────────────────────────────
-st.markdown('<div class="hero-title">Talent Intelligence System</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-title">TALENT HUNTER</div>', unsafe_allow_html=True)
 st.markdown('<div class="hero-sub">Multi-Agent · Hybrid RAG · Explainable AI · Bias-Aware · Skill Intelligence</div>', unsafe_allow_html=True)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -148,7 +157,7 @@ with tab_li_text:
 
 # ── Run button ────────────────────────────────────────────────────────────────
 st.divider()
-if st.button("🚀  Run Intelligence Pipeline", type="primary", use_container_width=True):
+if st.button("Search for Suitable Candidates 🔍", type="primary", use_container_width=True):
     if not jd_text.strip():
         st.error("Please enter the primary Job Description.")
     else:
@@ -214,8 +223,14 @@ if "results" in st.session_state:
     # Metrics
     m1, m2, m3, m4, m5 = st.columns(5)
     hire_count = sum(1 for r in results if r["score"].hire_recommendation in ["HIRE","STRONG HIRE"])
-    avg_score  = sum(r["score"].weighted_total for r in results) / len(results)
-    avg_conf   = sum(r["score"].confidence for r in results) / len(results)
+    avg_score = (
+    sum(r["score"].weighted_total for r in results) / len(results)
+    if results else 0
+)
+    avg_conf = (
+    sum(r["score"].confidence for r in results) / len(results)
+    if results else 0
+)
     n_roles    = len(results[0].get("all_jds", [])) if results else 1
     m1.metric("Screened",    len(results))
     m2.metric("Recommended", hire_count)
@@ -223,52 +238,74 @@ if "results" in st.session_state:
     m4.metric("Avg Confidence", f"{avg_conf*100:.0f}%")
     m5.metric("Open Roles",  n_roles)
 
-    # Ranked table
+
     st.markdown("#### 📊 Ranked Shortlist")
-    rec_icon = {"STRONG HIRE":"🟢","HIRE":"🔵","MAYBE":"🟡","NO HIRE":"🔴"}
-    table_data = []
+    table_rows = []
     for i, r in enumerate(results, 1):
         s    = r["score"]
         best = r["jd_matches"][0]["role_name"] if r.get("jd_matches") else "N/A"
-        best_sim = r["jd_matches"][0]["similarity"] if r.get("jd_matches") else 0
-        table_data.append({
-            "Rank": i, "Candidate": s.candidate_name,
-            "Score": f"{s.weighted_total}/10",
-            "Confidence": f"{int(s.confidence*100)}%",
-            "Sem Sim": f"{s.semantic_similarity:.3f}",
+        rec  = s.hire_recommendation
+        verdict_text = ("✅ SUITABLE FOR HIRING" if rec in ["STRONG HIRE","HIRE"]
+                        else "🟡 UNDER CONSIDERATION" if rec == "MAYBE"
+                        else "❌ NOT SUITABLE FOR HIRING")
+        table_rows.append({
+            "Rank":          i,
+            "Candidate":     s.candidate_name,
+            "Hiring Match":  f"{s.hiring_match_pct}%",
+            "Score":         f"{s.weighted_total}/10",
+            "Confidence":    f"{int(s.confidence*100)}%",
             "Best-Fit Role": best,
-            "Role Sim": f"{best_sim:.3f}",
-            "Verdict": rec_icon.get(s.hire_recommendation,"⚪") + " " + s.hire_recommendation,
+            "Verdict":       verdict_text,
         })
-    st.dataframe(table_data, use_container_width=True)
+    st.dataframe(table_rows, use_container_width=True,
+                 height=min(400, 80 + len(results)*45))
 
-    # ── Knowledge Graph ───────────────────────────────────────
-    if show_graph:
-        st.markdown("#### 🕸️ Candidate × Role Intelligence Graph")
-        st.caption("Hexagons = roles · Circles = candidates (size = score, color = verdict) · Bright edge = best-fit role")
-        st.plotly_chart(plot_multi_jd_graph(results), use_container_width=True)
-
-    # ── Competency Heatmap ────────────────────────────────────
-    if show_heatmap:
-        st.markdown("#### 🌡️ Competency Heatmap")
-        st.caption("Red = strong in that dimension · Blue = weak · Based on JD requirements")
-        st.plotly_chart(build_heatmap(results), use_container_width=True)
-
-    # ── Role match + explainability ───────────────────────────
-    st.markdown("#### 🎯 Candidate → Role Assignment")
+    st.markdown("#### 🔍 Candidate Breakdown")
     for rank, r in enumerate(results, 1):
         s          = r["score"]
-        jd_matches = r.get("jd_matches", [])
         profile    = r.get("profile")
-        emoji      = rec_icon.get(s.hire_recommendation, "⚪")
+        jd_matches = r.get("jd_matches", [])
         best       = jd_matches[0]["role_name"] if jd_matches else "N/A"
+        emoji      = REC_ICON.get(s.hire_recommendation, "⚪")
 
-        with st.expander(f"{emoji}  #{rank}  {s.candidate_name}  —  {s.weighted_total}/10  —  Best fit: {best}"):
+        with st.expander(
+            f"{emoji}  #{rank}  {s.candidate_name}  —  "
+            f"Hiring Match: {s.hiring_match_pct}%  —  {s.hire_recommendation}"
+        ):
+            st.markdown(
+                verdict_badge(s.hire_recommendation) +
+                f' &nbsp;<span style="color:#475569;font-size:0.75rem;">Best fit: {best}</span>',
+                unsafe_allow_html=True
+            )
+
+            match_color = ("#22c55e" if s.hiring_match_pct >= 70
+                           else "#f59e0b" if s.hiring_match_pct >= 50
+                           else "#ef4444")
+            st.markdown(f"""
+            <div style="display:flex;align-items:center;gap:16px;margin:14px 0;
+                        background:#0b0f1a;border:1px solid #1e2d45;
+                        border-radius:10px;padding:14px 18px;">
+                <div style="font-size:2.2rem;font-weight:800;color:{match_color};
+                            font-family:monospace;">{s.hiring_match_pct}%</div>
+                <div>
+                    <div style="font-size:0.85rem;font-weight:600;color:#e2e8f0;">
+                        Hiring Match
+                    </div>
+                    <div style="font-size:0.72rem;color:#64748b;">
+                        Semantic alignment + skill coverage + overall score
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
             col_a, col_b = st.columns(2)
             with col_a:
                 st.markdown("**📐 Dimension Scores**")
                 for dim in s.dimensions:
-                    st.progress(dim.score/10, text=f"{dim.name}: {dim.score}/10 ({int(dim.weight*100)}%)")
+                    st.progress(dim.score / 10,
+                                text=f"{dim.name}: {dim.score}/10 ({int(dim.weight*100)}%)")
                     st.caption(f"↳ {dim.justification}")
             with col_b:
                 st.markdown("**✅ Matched Skills**")
@@ -278,62 +315,61 @@ if "results" in st.session_state:
                 st.markdown("**💡 AI Reasoning**")
                 st.info(s.shortlist_reasoning)
 
-            # Role fit bars
-            st.markdown("**🎯 Fit vs All Roles**")
-            for idx, match in enumerate(jd_matches):
-                prefix = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else "  "
-                st.progress(min(match["similarity"], 1.0),
-                            text=f"{prefix} {match['role_name']}: {match['similarity']:.4f}")
+            if jd_matches:
+                st.markdown("**🎯 Fit vs All Roles**")
+                for idx, match in enumerate(jd_matches):
+                    prefix = "🥇" if idx==0 else "🥈" if idx==1 else "🥉" if idx==2 else "  "
+                    st.progress(min(match["similarity"], 1.0),
+                                text=f"{prefix} {match['role_name']}: {match['similarity']:.4f}")
 
-            # Skill gap forecast
-            if show_forecast and s.missing_skills and profile:
+            if s.missing_skills and profile:
                 forecast = compute_transferability(profile.skills, s.missing_skills)
                 f1, f2, f3 = st.columns(3)
-                f1.metric("Adaptability",    forecast["adaptability"])
-                f2.metric("Ramp-Up Time",    forecast["months_estimate"])
+                f1.metric("Adaptability",      forecast["adaptability"])
+                f2.metric("Ramp-Up Time",      forecast["months_estimate"])
                 f3.metric("3-Month Readiness", f"{forecast['readiness_score']}%")
 
-            # Bias audit
-            if show_bias and r.get("bias_audit"):
-                audit = r["bias_audit"]
-                risk  = audit.get("bias_risk_level","UNKNOWN")
-                risk_icon = {"LOW":"🟢","MEDIUM":"🟡","HIGH":"🔴"}.get(risk,"⚪")
+            if r.get("bias_audit"):
+                audit     = r["bias_audit"]
+                risk      = audit.get("bias_risk_level", "UNKNOWN")
+                risk_icon = {"LOW":"🟢","MEDIUM":"🟡","HIGH":"��"}.get(risk,"⚪")
                 st.markdown(f"**🛡️ Bias Audit** — {risk_icon} {risk}")
                 if audit.get("bias_detected"):
-                    st.warning(", ".join(audit.get("bias_types",[])))
+                    st.warning("⚠️ Bias types: " + ", ".join(audit.get("bias_types", [])))
+                    for rec_item in audit.get("recommendations", []):
+                        st.write(f"• {rec_item}")
                 else:
                     st.success("No bias detected.")
 
-            # HR override
+            st.markdown("**🔧 HR Override**")
             ov1, ov2 = st.columns([1, 3])
-            new_score = ov1.number_input("Override Score", 0.0, 10.0,
+            new_score = ov1.number_input("New Score", 0.0, 10.0,
                                           s.weighted_total, 0.5, key=f"ov_{rank}")
-            reason = ov2.text_input("Reason", key=f"re_{rank}",
+            reason = ov2.text_input("Reason (required)", key=f"re_{rank}",
                                      placeholder="e.g. Strong cultural fit from interview")
-            if st.button("✅ Apply Override", key=f"ap_{rank}"):
+            if st.button("✅ Apply Override", key=f"ap_{rank}", type="secondary"):
                 if not reason.strip():
-                    st.error("Please enter a reason for the override.")
+                    st.error("Please enter a reason.")
                 else:
-                    # Write new score back into session state so it persists
                     idx = rank - 1
-                    st.session_state["results"][idx]["score"].weighted_total = new_score
-
-                    # Recalculate hire recommendation based on new score
-                    if new_score >= 7.5:
-                        new_rec = "STRONG HIRE"
-                    elif new_score >= 6.0:
-                        new_rec = "HIRE"
-                    elif new_score >= 4.5:
-                        new_rec = "MAYBE"
-                    else:
-                        new_rec = "NO HIRE"
-                    st.session_state["results"][idx]["score"].hire_recommendation = new_rec
-
-                    # Re-sort results by new scores
-                    st.session_state["results"].sort(
+                    st.session_state.results[idx]["score"].weighted_total = new_score
+                    if   new_score >= 7.5: new_rec = "STRONG HIRE"
+                    elif new_score >= 6.0: new_rec = "HIRE"
+                    elif new_score >= 4.5: new_rec = "MAYBE"
+                    else:                  new_rec = "NO HIRE"
+                    st.session_state.results[idx]["score"].hire_recommendation = new_rec
+                    st.session_state.results.sort(
                         key=lambda x: x["score"].weighted_total, reverse=True)
+                    st.session_state.override_log.append({
+                        "candidate":  s.candidate_name,
+                        "old_score":  s.weighted_total,
+                        "new_score":  new_score,
+                        "new_verdict":new_rec,
+                        "reason":     reason,
+                    })
+                    st.success(f"✅ {s.candidate_name}: {s.weighted_total} → {new_score}/10 | {new_rec}")
+                    st.rerun()
 
-                    # Log override to session state audit trail
                     if "override_log" not in st.session_state:
                         st.session_state["override_log"] = []
                     st.session_state["override_log"].append({
@@ -351,7 +387,6 @@ if "results" in st.session_state:
     # EMAIL SECTION
     # ══════════════════════════════════════════════════════════
     st.divider()
-    # ── Override audit log ────────────────────────────────────
     if st.session_state.get("override_log"):
         with st.expander(f"📋 HR Override Audit Log ({len(st.session_state['override_log'])} entries)"):
             for entry in st.session_state["override_log"]:
@@ -366,7 +401,6 @@ if "results" in st.session_state:
     st.markdown("#### 📧 Send Emails to Candidates")
     st.caption("Pre-written templates auto-filled with candidate names. Edit before sending.")
 
-    # SMTP settings
     with st.expander("⚙️ Email / SMTP Settings", expanded=False):
         ec1, ec2, ec3 = st.columns(3)
         smtp_host_in  = ec1.text_input("SMTP Host",    value=settings.smtp_host)
@@ -378,7 +412,6 @@ if "results" in st.session_state:
         company_in    = ec3.text_input("Company Name", value=settings.company_name,
                                         placeholder="e.g. TechCorp AI")
 
-    # ── Selection email customisation fields ──────────────────
     st.markdown("#### 🟢 Selection Emails")
     st.caption("Sent to HIRE and STRONG HIRE candidates — personalized by HR before sending.")
 
@@ -400,7 +433,6 @@ if "results" in st.session_state:
             best_role = r["jd_matches"][0]["role_name"] if r.get("jd_matches") else primary_role
 
             with st.expander(f"🟢  {s.candidate_name}  —  {s.hire_recommendation}  —  {best_role}"):
-                # Pre-fill template immediately
                 default_body = get_selection_template(
                     candidate_name=s.candidate_name,
                     role=best_role,
@@ -417,7 +449,6 @@ if "results" in st.session_state:
                 if key_body not in st.session_state:
                     st.session_state[key_body] = default_body
 
-                # AI personalize button
                 if st.button("✨ AI Personalize", key=f"ai_sel_{s.candidate_name}",
                              help="Adds one sentence referencing candidate's actual skills"):
                     with st.spinner("Personalizing..."):
@@ -434,14 +465,12 @@ if "results" in st.session_state:
                     height=340,
                     key=f"sel_edit_{s.candidate_name}",
                 )
-                # Save edits back
                 st.session_state[key_body] = edited
 
                 to_addr = st.text_input("Candidate Email Address",
                                          key=f"sel_email_{s.candidate_name}",
                                          placeholder="candidate@email.com")
                 subject = f"🎉 Congratulations! Next Steps — {best_role} at {company_in or settings.company_name}"
-
                 if st.button("📤 Send Selection Email", key=f"send_sel_{s.candidate_name}"):
                     if not to_addr:
                         st.error("Enter candidate email.")
@@ -456,7 +485,6 @@ if "results" in st.session_state:
                         else:
                             st.error(msg)
 
-    # ── Rejection emails ──────────────────────────────────────
     st.markdown("#### 🔴 Rejection Emails")
     st.caption("Auto-filled with candidate name. Edit freely before sending.")
 
@@ -490,6 +518,7 @@ if "results" in st.session_state:
                                          key=f"rej_email_{s.candidate_name}",
                                          placeholder="candidate@email.com")
                 subject = f"Update on your application — {primary_role}"
+
                 if st.button("📤 Send Rejection Email", key=f"send_rej_{s.candidate_name}"):
                     if not to_addr:
                         st.error("Enter candidate email.")

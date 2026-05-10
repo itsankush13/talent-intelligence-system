@@ -102,6 +102,18 @@ Resume Sections:
     else:
         rec = "NO HIRE"
 
+    matched_skills = scored.get("matched_skills", [])
+    missing_skills = scored.get("missing_skills", [])
+
+    # Hiring match % — calculated BEFORE building the object
+    skill_coverage = len(matched_skills) / max(
+        len(jd_structured.get("required_skills", [])), 1)
+    hiring_match = (
+        0.5 * semantic_similarity +
+        0.3 * skill_coverage +
+        0.2 * (ensemble_score / 10)
+    ) * 100
+
     return CandidateScore(
         candidate_name=candidate.name,
         file_name="",
@@ -109,10 +121,11 @@ Resume Sections:
         weighted_total=round(ensemble_score, 2),
         confidence=round(confidence, 2),
         hire_recommendation=rec,
-        matched_skills=scored.get("matched_skills", []),
-        missing_skills=scored.get("missing_skills", []),
+        matched_skills=matched_skills,
+        missing_skills=missing_skills,
         semantic_similarity=round(semantic_similarity, 3),
         bm25_score=round(bm25_score, 2),
         bias_masked=True,
-        shortlist_reasoning=scored.get("shortlist_reasoning", "")
+        shortlist_reasoning=scored.get("shortlist_reasoning", ""),
+        hiring_match_pct=round(min(hiring_match, 100), 1),
     )

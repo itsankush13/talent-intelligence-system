@@ -64,7 +64,11 @@ def run_pipeline(jd_text: str, resume_files: List[str],
             sem_scores.get(i, 0.0), bm25_map.get(i, 0.0)
         )
         score.file_name = cand["file"]
-        audit = audit_for_bias(score.shortlist_reasoning, profile.name)
+        audit = audit_for_bias(
+            score.shortlist_reasoning,
+            profile.name,
+            profile.raw_text        # ← pass raw text so bias agent can scan it
+        )
 
         # Multi-JD matching
         jd_matches = match_candidate_to_jds(profile.raw_text, all_jds_parsed)

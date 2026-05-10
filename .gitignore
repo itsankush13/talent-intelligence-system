@@ -1,8 +1,11 @@
-venv/
 .env
+venv/
 __pycache__/
 *.pyc
-*.pth
+*.pyo
+*.faiss
+.DS_Store
 outputs/
 logs/
-*.faiss
+*.egg-info/
+.streamlit/secrets.toml

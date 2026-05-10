@@ -227,12 +227,36 @@ def generate_pdf_report(results: list, jd_structured: dict, output_path: str) ->
         elements.append(Spacer(1, 0.15*cm))
  
         # Meta line
+        match_pct = getattr(s, 'hiring_match_pct', 0)
+        match_color = (colors.HexColor("#22c55e") if match_pct >= 70
+                       else colors.HexColor("#f59e0b") if match_pct >= 50
+                       else RED)
+
         elements.append(Paragraph(
             f"Score: {s.weighted_total}/10  |  "
             f"Confidence: {int(s.confidence*100)}%  |  "
-            f"Semantic: {s.semantic_similarity:.3f}  |  "
             f"Source: {s.file_name}",
             S["small"]))
+
+        # Hiring match badge
+        elements.append(Spacer(1, 0.15*cm))
+        match_row = [[
+            Paragraph("Hiring Match %", ParagraphStyle("hml", fontSize=8,
+                       fontName="Helvetica-Bold", textColor=colors.HexColor("#94a3b8"))),
+            Paragraph(f"{match_pct}%", ParagraphStyle("hmv", fontSize=16,
+                       fontName="Helvetica-Bold", textColor=match_color)),
+            Paragraph("Semantic alignment + skill coverage + overall score",
+                       ParagraphStyle("hms", fontSize=7.5, textColor=colors.HexColor("#64748b"))),
+        ]]
+        match_table = Table(match_row, colWidths=[3.5*cm, 3*cm, 10.5*cm])
+        match_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#0b0f1a")),
+            ("PADDING",    (0,0), (-1,-1), 8),
+            ("VALIGN",     (0,0), (-1,-1), "MIDDLE"),
+            ("ROUNDEDCORNERS", [4]),
+        ]))
+        elements.append(match_table)
+        elements.append(Spacer(1, 0.2*cm))
         elements.append(Spacer(1, 0.2*cm))
  
         # Dimension scores — justification wraps inside cell
