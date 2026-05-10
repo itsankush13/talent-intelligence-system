@@ -4,301 +4,344 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
                                  Table, TableStyle, HRFlowable, PageBreak)
-from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from datetime import datetime
-
-
+ 
 # ── Color palette ──────────────────────────────────────────────────────────────
 DARK       = colors.HexColor("#07090f")
 NAVY       = colors.HexColor("#1a1a2e")
 TEAL       = colors.HexColor("#4ECDC4")
-PURPLE     = colors.HexColor("#A29BFE")
-RED        = colors.HexColor("#FF6B6B")
-YELLOW     = colors.HexColor("#FFE66D")
-GREEN      = colors.HexColor("#00ff88")
+RED        = colors.HexColor("#e53e3e")
+ORANGE     = colors.HexColor("#f39c12")
 LIGHT_GREY = colors.HexColor("#f7f9fc")
 MID_GREY   = colors.HexColor("#cccccc")
-
+DARK_GREY  = colors.HexColor("#555555")
+ 
 REC_COLOR = {
-    "STRONG HIRE": GREEN,
-    "HIRE":        TEAL,
-    "MAYBE":       YELLOW,
+    "STRONG HIRE": colors.HexColor("#1a6b3c"),   # dark green bg
+    "HIRE":        colors.HexColor("#1a4a6b"),   # dark blue bg
+    "MAYBE":       colors.HexColor("#6b5a1a"),   # dark amber bg
+    "NO HIRE":     colors.HexColor("#6b1a1a"),   # dark red bg
+}
+REC_TEXT_COLOR = {
+    "STRONG HIRE": colors.HexColor("#00cc66"),
+    "HIRE":        colors.HexColor("#4ECDC4"),
+    "MAYBE":       colors.HexColor("#FFE66D"),
     "NO HIRE":     RED,
 }
-
-
+ 
+VERDICT_LABEL = {
+    "STRONG HIRE": "SUITABLE FOR HIRING",
+    "HIRE":        "SUITABLE FOR HIRING",
+    "MAYBE":       "UNDER CONSIDERATION",
+    "NO HIRE":     "NOT SUITABLE FOR HIRING",
+}
+ 
+ 
 def _styles():
     base = getSampleStyleSheet()
+    wrap = dict(wordWrap='CJK')   # forces word wrap inside table cells
+ 
     return {
-        "title": ParagraphStyle("ReportTitle", parent=base["Title"],
-                                 fontSize=22, textColor=NAVY,
-                                 spaceAfter=4, fontName="Helvetica-Bold"),
-        "h2":    ParagraphStyle("H2", parent=base["Heading2"],
-                                 fontSize=13, textColor=NAVY,
-                                 spaceBefore=14, spaceAfter=4,
-                                 fontName="Helvetica-Bold"),
-        "h3":    ParagraphStyle("H3", parent=base["Heading3"],
-                                 fontSize=10, textColor=NAVY,
-                                 spaceBefore=8, spaceAfter=2,
-                                 fontName="Helvetica-Bold"),
-        "body":  ParagraphStyle("Body", parent=base["Normal"],
-                                 fontSize=8.5, leading=13),
-        "small": ParagraphStyle("Small", parent=base["Normal"],
-                                 fontSize=7.5, leading=11,
-                                 textColor=colors.HexColor("#555555")),
-        "center":ParagraphStyle("Center", parent=base["Normal"],
-                                 fontSize=8.5, alignment=TA_CENTER),
+        "title":   ParagraphStyle("ReportTitle", parent=base["Title"],
+                                   fontSize=20, textColor=NAVY,
+                                   spaceAfter=4, fontName="Helvetica-Bold"),
+        "h2":      ParagraphStyle("H2", parent=base["Heading2"],
+                                   fontSize=12, textColor=NAVY,
+                                   spaceBefore=12, spaceAfter=3,
+                                   fontName="Helvetica-Bold"),
+        "h3":      ParagraphStyle("H3", parent=base["Heading3"],
+                                   fontSize=10, textColor=NAVY,
+                                   spaceBefore=6, spaceAfter=2,
+                                   fontName="Helvetica-Bold"),
+        "body":    ParagraphStyle("Body", parent=base["Normal"],
+                                   fontSize=8, leading=12),
+        "small":   ParagraphStyle("Small", parent=base["Normal"],
+                                   fontSize=7, leading=10,
+                                   textColor=DARK_GREY),
+        "cell":    ParagraphStyle("Cell", parent=base["Normal"],
+                                   fontSize=7.5, leading=11,
+                                   wordWrap='CJK'),       # ← wraps in cells
+        "cell_b":  ParagraphStyle("CellB", parent=base["Normal"],
+                                   fontSize=7.5, leading=11,
+                                   fontName="Helvetica-Bold",
+                                   wordWrap='CJK'),
     }
-
-
+ 
+ 
+def _verdict_badge(rec: str, S: dict) -> Table:
+    """Colored badge showing SUITABLE FOR HIRING / NOT SUITABLE FOR HIRING."""
+    label  = VERDICT_LABEL.get(rec, rec)
+    bg     = REC_COLOR.get(rec, colors.grey)
+    fg     = REC_TEXT_COLOR.get(rec, colors.white)
+ 
+    t = Table([[Paragraph(label, ParagraphStyle(
+                    "Badge", fontSize=10, textColor=fg,
+                    fontName="Helvetica-Bold", alignment=TA_CENTER))]],
+              colWidths=[17*cm])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), bg),
+        ("ALIGN",      (0,0), (-1,-1), "CENTER"),
+        ("PADDING",    (0,0), (-1,-1), 8),
+        ("ROUNDEDCORNERS", [4]),
+    ]))
+    return t
+ 
+ 
 def generate_pdf_report(results: list, jd_structured: dict, output_path: str) -> str:
-    doc = SimpleDocTemplate(output_path, pagesize=A4,
-                            leftMargin=2*cm, rightMargin=2*cm,
-                            topMargin=2*cm, bottomMargin=2*cm)
-    S = _styles()
+    doc = SimpleDocTemplate(
+        output_path, pagesize=A4,
+        leftMargin=1.8*cm, rightMargin=1.8*cm,
+        topMargin=1.8*cm, bottomMargin=1.8*cm
+    )
+    S        = _styles()
     elements = []
-
-    # ── Cover header ──────────────────────────────────────────────────────────
+    PAGE_W   = 17*cm   # usable width
+ 
+    # ── Cover header ──────────────────────────────────────────
     elements.append(Paragraph("Talent Intelligence System", S["title"]))
     elements.append(Paragraph(
-        f"AI-Powered Shortlist Report &nbsp;·&nbsp; {datetime.now().strftime('%d %b %Y, %H:%M')}",
+        f"AI-Powered Shortlist Report  ·  {datetime.now().strftime('%d %b %Y, %H:%M')}",
         S["body"]))
     elements.append(Spacer(1, 0.3*cm))
-    elements.append(HRFlowable(width="100%", thickness=2.5, color=TEAL))
+    elements.append(HRFlowable(width="100%", thickness=2, color=TEAL))
     elements.append(Spacer(1, 0.4*cm))
-
-    # ── JD summary ────────────────────────────────────────────────────────────
+ 
+    # ── JD summary ────────────────────────────────────────────
     elements.append(Paragraph("Primary Job Description", S["h2"]))
+    req_skills = ", ".join(jd_structured.get("required_skills", [])[:10])
     jd_rows = [
-        ["Role",          jd_structured.get("role_title", "N/A")],
-        ["Seniority",     jd_structured.get("seniority_level", "N/A")],
-        ["Min Exp.",      f"{jd_structured.get('min_experience_years', '?')} yrs"],
-        ["Required Skills",
-         ", ".join(jd_structured.get("required_skills", [])[:10])],
+        [Paragraph("Role",             S["cell_b"]), Paragraph(jd_structured.get("role_title","N/A"),            S["cell"])],
+        [Paragraph("Seniority",        S["cell_b"]), Paragraph(jd_structured.get("seniority_level","N/A"),       S["cell"])],
+        [Paragraph("Min Experience",   S["cell_b"]), Paragraph(str(jd_structured.get("min_experience_years","?"))+" yrs", S["cell"])],
+        [Paragraph("Required Skills",  S["cell_b"]), Paragraph(req_skills or "N/A",                              S["cell"])],
     ]
-    jd_table = Table(jd_rows, colWidths=[3.8*cm, 13.2*cm])
+    jd_table = Table(jd_rows, colWidths=[3.5*cm, 13.5*cm])
     jd_table.setStyle(TableStyle([
         ("BACKGROUND",  (0,0), (0,-1), colors.HexColor("#eef2ff")),
         ("FONTNAME",    (0,0), (0,-1), "Helvetica-Bold"),
-        ("FONTSIZE",    (0,0), (-1,-1), 8.5),
         ("GRID",        (0,0), (-1,-1), 0.4, MID_GREY),
         ("PADDING",     (0,0), (-1,-1), 6),
         ("VALIGN",      (0,0), (-1,-1), "TOP"),
     ]))
     elements.append(jd_table)
-    elements.append(Spacer(1, 0.6*cm))
-
-    # ── Summary statistics ────────────────────────────────────────────────────
+    elements.append(Spacer(1, 0.5*cm))
+ 
+    # ── Summary stats ─────────────────────────────────────────
     elements.append(Paragraph("Screening Summary", S["h2"]))
-    total      = len(results)
-    strong     = sum(1 for r in results if r["score"].hire_recommendation == "STRONG HIRE")
-    hire       = sum(1 for r in results if r["score"].hire_recommendation == "HIRE")
-    maybe      = sum(1 for r in results if r["score"].hire_recommendation == "MAYBE")
-    no_hire    = sum(1 for r in results if r["score"].hire_recommendation == "NO HIRE")
-    avg_score  = sum(r["score"].weighted_total for r in results) / max(total, 1)
-
+    total   = len(results)
+    strong  = sum(1 for r in results if r["score"].hire_recommendation == "STRONG HIRE")
+    hire    = sum(1 for r in results if r["score"].hire_recommendation == "HIRE")
+    maybe   = sum(1 for r in results if r["score"].hire_recommendation == "MAYBE")
+    no_hire = sum(1 for r in results if r["score"].hire_recommendation == "NO HIRE")
+    avg_sc  = sum(r["score"].weighted_total for r in results) / max(total, 1)
+ 
     stat_rows = [
-        ["Total Screened", "Strong Hire", "Hire", "Maybe", "No Hire", "Avg Score"],
-        [str(total), str(strong), str(hire), str(maybe), str(no_hire),
-         f"{avg_score:.1f}/10"],
+        [Paragraph(h, ParagraphStyle("sh", fontSize=8, fontName="Helvetica-Bold",
+                                      textColor=colors.white, alignment=TA_CENTER))
+         for h in ["Total", "Strong Hire", "Hire", "Maybe", "No Hire", "Avg Score"]],
+        [Paragraph(v, ParagraphStyle("sv", fontSize=9, fontName="Helvetica-Bold",
+                                      alignment=TA_CENTER))
+         for v in [str(total), str(strong), str(hire), str(maybe), str(no_hire), f"{avg_sc:.1f}/10"]],
     ]
-    stat_table = Table(stat_rows, colWidths=[3*cm]*6)
-    stat_table.setStyle(TableStyle([
+    cw = [PAGE_W/6]*6
+    stat_t = Table(stat_rows, colWidths=cw)
+    stat_t.setStyle(TableStyle([
         ("BACKGROUND",  (0,0), (-1,0), NAVY),
-        ("TEXTCOLOR",   (0,0), (-1,0), colors.white),
-        ("FONTNAME",    (0,0), (-1,0), "Helvetica-Bold"),
-        ("FONTSIZE",    (0,0), (-1,-1), 9),
-        ("ALIGN",       (0,0), (-1,-1), "CENTER"),
         ("GRID",        (0,0), (-1,-1), 0.4, MID_GREY),
-        ("PADDING",     (0,0), (-1,-1), 8),
-        ("BACKGROUND",  (0,1), (0,1), colors.HexColor("#eef2ff")),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1),[LIGHT_GREY]),
+        ("PADDING",     (0,0), (-1,-1), 7),
+        ("ALIGN",       (0,0), (-1,-1), "CENTER"),
     ]))
-    elements.append(stat_table)
-    elements.append(Spacer(1, 0.6*cm))
-
-    # ── Master ranking table ──────────────────────────────────────────────────
-    elements.append(Paragraph("Candidate Rankings — Primary Role", S["h2"]))
-
-    rank_header = ["#", "Candidate", "Score", "Conf.", "Semantic", "Verdict", "Best-Fit Role"]
-    rank_rows   = [rank_header]
-
+    elements.append(stat_t)
+    elements.append(Spacer(1, 0.5*cm))
+ 
+    # ── Master ranking table ──────────────────────────────────
+    elements.append(Paragraph("Candidate Rankings", S["h2"]))
+ 
+    primary_role = jd_structured.get("role_title", "Primary Role")
+ 
+    hdr_style = ParagraphStyle("Hdr", fontSize=7.5, fontName="Helvetica-Bold",
+                                textColor=colors.white, alignment=TA_CENTER)
+    rank_rows = [[
+        Paragraph("#",          hdr_style),
+        Paragraph("Candidate",  hdr_style),
+        Paragraph("Score",      hdr_style),
+        Paragraph("Conf.",      hdr_style),
+        Paragraph("Verdict",    hdr_style),
+        Paragraph("Best-Fit Role", hdr_style),
+    ]]
+ 
     for i, r in enumerate(results, 1):
-        s    = r["score"]
-        best = r["jd_matches"][0]["role_name"] if r.get("jd_matches") else "—"
-        # Mark if best fit is NOT the primary role
-        primary_role = jd_structured.get("role_title", "")
-        alt_flag = ""
-        if r.get("jd_matches") and len(r["jd_matches"]) > 1:
-            if r["jd_matches"][0]["role_name"] != primary_role:
-                alt_flag = " ★"   # star = better fit elsewhere
+        s        = r["score"]
+        best     = r["jd_matches"][0]["role_name"] if r.get("jd_matches") else "—"
+        verdict  = VERDICT_LABEL.get(s.hire_recommendation, s.hire_recommendation)
+        vc       = REC_TEXT_COLOR.get(s.hire_recommendation, colors.black)
+ 
         rank_rows.append([
-            str(i),
-            s.candidate_name,
-            f"{s.weighted_total}/10",
-            f"{int(s.confidence*100)}%",
-            f"{s.semantic_similarity:.3f}",
-            s.hire_recommendation,
-            best + alt_flag,
+            Paragraph(str(i),                  S["cell"]),
+            Paragraph(s.candidate_name,        S["cell"]),
+            Paragraph(f"{s.weighted_total}/10",S["cell"]),
+            Paragraph(f"{int(s.confidence*100)}%", S["cell"]),
+            Paragraph(verdict, ParagraphStyle("vc", fontSize=7, fontName="Helvetica-Bold",
+                                               textColor=vc, wordWrap='CJK')),
+            Paragraph(best,                    S["cell"]),
         ])
-
-    rank_table = Table(rank_rows,
-                       colWidths=[1*cm, 4.5*cm, 2*cm, 1.8*cm, 2.2*cm, 2.8*cm, 3.7*cm])
-    ts = TableStyle([
-        ("BACKGROUND",  (0,0), (-1,0), NAVY),
-        ("TEXTCOLOR",   (0,0), (-1,0), colors.white),
-        ("FONTNAME",    (0,0), (-1,0), "Helvetica-Bold"),
-        ("FONTSIZE",    (0,0), (-1,-1), 8),
-        ("GRID",        (0,0), (-1,-1), 0.3, MID_GREY),
-        ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, LIGHT_GREY]),
-        ("PADDING",     (0,0), (-1,-1), 6),
-        ("ALIGN",       (2,0), (-1,-1), "CENTER"),
-        ("VALIGN",      (0,0), (-1,-1), "MIDDLE"),
+ 
+    rank_t = Table(rank_rows, colWidths=[1*cm, 4*cm, 1.8*cm, 1.5*cm, 4.2*cm, 4.5*cm])
+    rts = TableStyle([
+        ("BACKGROUND",     (0,0), (-1,0), NAVY),
+        ("GRID",           (0,0), (-1,-1), 0.3, MID_GREY),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, LIGHT_GREY]),
+        ("PADDING",        (0,0), (-1,-1), 5),
+        ("VALIGN",         (0,0), (-1,-1), "TOP"),
+        ("ALIGN",          (2,0), (4,0),   "CENTER"),
     ])
-    # Color verdict column per recommendation
-    for i, r in enumerate(results, 1):
-        c = REC_COLOR.get(r["score"].hire_recommendation, colors.grey)
-        ts.add("TEXTCOLOR",  (5, i), (5, i), c)
-        ts.add("FONTNAME",   (5, i), (5, i), "Helvetica-Bold")
-    rank_table.setStyle(ts)
-    elements.append(rank_table)
-    elements.append(Paragraph(
-        "★ = candidate's highest semantic similarity is to an alternate role, not the primary JD.",
-        S["small"]))
+    rank_t.setStyle(rts)
+    elements.append(rank_t)
     elements.append(Spacer(1, 0.8*cm))
-
-    # ── Per-candidate detailed pages ──────────────────────────────────────────
+ 
+    # ── Per-candidate detail ──────────────────────────────────
     elements.append(Paragraph("Detailed Candidate Analysis", S["h2"]))
     elements.append(HRFlowable(width="100%", thickness=1, color=MID_GREY))
-
-    primary_role = jd_structured.get("role_title", "Primary Role")
-
+ 
     for rank, r in enumerate(results, 1):
-        s          = r["score"]
-        jd_matches = r.get("jd_matches", [])
-        audit      = r.get("bias_audit", {})
-        rec_color  = REC_COLOR.get(s.hire_recommendation, colors.grey)
-
+        s         = r["score"]
+        jd_matches= r.get("jd_matches", [])
+        audit     = r.get("bias_audit", {})
+        rec       = s.hire_recommendation
+        verdict   = VERDICT_LABEL.get(rec, rec)
+ 
         elements.append(Spacer(1, 0.4*cm))
-
-        # Candidate header
+ 
+        # Candidate name header
         elements.append(Paragraph(
             f"#{rank}  {s.candidate_name}",
-            ParagraphStyle("CH", parent=S["h2"], fontSize=13,
-                           textColor=rec_color, spaceBefore=6)))
+            ParagraphStyle("CH", parent=S["h2"], fontSize=12,
+                           textColor=REC_TEXT_COLOR.get(rec, colors.black),
+                           spaceBefore=4)))
+ 
+        # Verdict badge
+        elements.append(Spacer(1, 0.15*cm))
+        elements.append(_verdict_badge(rec, S))
+        elements.append(Spacer(1, 0.15*cm))
+ 
+        # Meta line
         elements.append(Paragraph(
-            f"Verdict: {s.hire_recommendation}  |  Score: {s.weighted_total}/10  |  "
-            f"Confidence: {int(s.confidence*100)}%  |  Source: {s.file_name}",
+            f"Score: {s.weighted_total}/10  |  "
+            f"Confidence: {int(s.confidence*100)}%  |  "
+            f"Semantic: {s.semantic_similarity:.3f}  |  "
+            f"Source: {s.file_name}",
             S["small"]))
-        elements.append(Spacer(1, 0.25*cm))
-
-        # ── Dimension scores table ────────────────────────────
+        elements.append(Spacer(1, 0.2*cm))
+ 
+        # Dimension scores — justification wraps inside cell
         elements.append(Paragraph("Scoring Breakdown", S["h3"]))
-        dim_rows = [["Dimension", "Score", "Weight", "Justification"]]
+        dim_hdr = [
+            Paragraph(h, ParagraphStyle("dh", fontSize=7.5, fontName="Helvetica-Bold",
+                                         textColor=colors.white))
+            for h in ["Dimension", "Score", "Weight", "Justification"]
+        ]
+        dim_rows = [dim_hdr]
         for dim in s.dimensions:
             dim_rows.append([
-                dim.name,
-                f"{dim.score}/10",
-                f"{int(dim.weight*100)}%",
-                dim.justification,
+                Paragraph(dim.name,                     S["cell"]),
+                Paragraph(f"{dim.score}/10",            S["cell"]),
+                Paragraph(f"{int(dim.weight*100)}%",    S["cell"]),
+                Paragraph(dim.justification or "—",     S["cell"]),  # wraps!
             ])
-        dim_table = Table(dim_rows, colWidths=[3.8*cm, 1.8*cm, 1.8*cm, 9.6*cm])
-        dim_table.setStyle(TableStyle([
-            ("BACKGROUND",  (0,0), (-1,0), colors.HexColor("#2c3e50")),
-            ("TEXTCOLOR",   (0,0), (-1,0), colors.white),
-            ("FONTNAME",    (0,0), (-1,0), "Helvetica-Bold"),
-            ("FONTSIZE",    (0,0), (-1,-1), 8),
-            ("GRID",        (0,0), (-1,-1), 0.3, MID_GREY),
-            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, LIGHT_GREY]),
-            ("PADDING",     (0,0), (-1,-1), 5),
-            ("VALIGN",      (0,0), (-1,-1), "TOP"),
+        dim_t = Table(dim_rows, colWidths=[3.5*cm, 1.6*cm, 1.5*cm, 10.4*cm])
+        dim_t.setStyle(TableStyle([
+            ("BACKGROUND",     (0,0), (-1,0), colors.HexColor("#2c3e50")),
+            ("FONTNAME",       (0,0), (-1,0), "Helvetica-Bold"),
+            ("GRID",           (0,0), (-1,-1), 0.3, MID_GREY),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, LIGHT_GREY]),
+            ("PADDING",        (0,0), (-1,-1), 5),
+            ("VALIGN",         (0,0), (-1,-1), "TOP"),
         ]))
-        elements.append(dim_table)
+        elements.append(dim_t)
         elements.append(Spacer(1, 0.2*cm))
-
-        # ── Skills ────────────────────────────────────────────
+ 
+        # Skills — wrap long lists
+        matched_str = ", ".join(s.matched_skills) if s.matched_skills else "None detected"
+        missing_str = ", ".join(s.missing_skills) if s.missing_skills else "None — full match"
+        elements.append(Paragraph(f"<b>Matched Skills:</b> {matched_str}", S["body"]))
+        elements.append(Paragraph(f"<b>Missing Skills:</b> {missing_str}", S["body"]))
+        elements.append(Spacer(1, 0.1*cm))
         elements.append(Paragraph(
-            f"<b>Matched Skills:</b> {', '.join(s.matched_skills) or 'None detected'}",
-            S["body"]))
-        elements.append(Paragraph(
-            f"<b>Missing Skills:</b> {', '.join(s.missing_skills) or 'None — strong match!'}",
-            S["body"]))
-        elements.append(Paragraph(
-            f"<b>AI Reasoning:</b> {s.shortlist_reasoning}", S["body"]))
+            f"<b>AI Reasoning:</b> {s.shortlist_reasoning or '—'}", S["body"]))
         elements.append(Spacer(1, 0.25*cm))
-
-        # ── Multi-JD fit section ──────────────────────────────
+ 
+        # Role fit analysis
         elements.append(Paragraph("Role Fit Analysis — All Open Positions", S["h3"]))
-
+ 
         if jd_matches:
-            best_role = jd_matches[0]["role_name"]
-            not_primary = (best_role != primary_role)
-
+            best_role    = jd_matches[0]["role_name"]
+            not_primary  = (best_role != primary_role)
+ 
             if not_primary:
                 elements.append(Paragraph(
                     f"⚠  {s.candidate_name} shows LOW fit for the primary role "
-                    f"({primary_role}) but is a STRONG match for: {best_role}",
+                    f"({primary_role}) but is a better match for: {best_role}",
                     ParagraphStyle("Warn", parent=S["body"],
-                                   textColor=colors.HexColor("#e67e22"),
-                                   fontName="Helvetica-Bold")))
+                                   textColor=ORANGE, fontName="Helvetica-Bold")))
             else:
                 elements.append(Paragraph(
-                    f"✓  {s.candidate_name} is best suited for the primary role: {primary_role}",
-                    ParagraphStyle("Good", parent=S["body"],
-                                   textColor=GREEN, fontName="Helvetica-Bold")))
-
-            elements.append(Spacer(1, 0.15*cm))
-
-            # Role match table
-            jd_rows_data = [["Rank", "Role", "Similarity Score", "Fit Level"]]
-            for idx, match in enumerate(jd_matches):
-                sim = match["similarity"]
-                fit = "Excellent" if sim > 0.75 else "Good" if sim > 0.55 else "Partial" if sim > 0.35 else "Poor"
-                jd_rows_data.append([
-                    f"#{idx+1}",
-                    match["role_name"],
-                    f"{sim:.4f}",
-                    fit,
+                    f"✓  Best suited for the primary role: {primary_role}",
+                    ParagraphStyle("Ok", parent=S["body"],
+                                   textColor=colors.HexColor("#1a6b3c"),
+                                   fontName="Helvetica-Bold")))
+ 
+            elements.append(Spacer(1, 0.12*cm))
+ 
+            jd_hdr = [Paragraph(h, ParagraphStyle("jh", fontSize=7.5,
+                                                    fontName="Helvetica-Bold",
+                                                    textColor=colors.white))
+                      for h in ["Rank", "Role", "Similarity", "Fit Level"]]
+            jd_data = [jd_hdr]
+            for idx, m in enumerate(jd_matches):
+                sim = m["similarity"]
+                fit = ("Excellent" if sim > 0.75 else
+                       "Good"      if sim > 0.55 else
+                       "Partial"   if sim > 0.35 else "Poor")
+                jd_data.append([
+                    Paragraph(f"#{idx+1}",      S["cell"]),
+                    Paragraph(m["role_name"],   S["cell"]),
+                    Paragraph(f"{sim:.4f}",     S["cell"]),
+                    Paragraph(fit,              S["cell"]),
                 ])
-            jd_match_table = Table(jd_rows_data,
-                                   colWidths=[1.5*cm, 6*cm, 4*cm, 5.5*cm])
+            jd_t = Table(jd_data, colWidths=[1.5*cm, 7*cm, 3.5*cm, 5*cm])
             jmts = TableStyle([
-                ("BACKGROUND",  (0,0), (-1,0), NAVY),
-                ("TEXTCOLOR",   (0,0), (-1,0), colors.white),
-                ("FONTNAME",    (0,0), (-1,0), "Helvetica-Bold"),
-                ("FONTSIZE",    (0,0), (-1,-1), 8),
-                ("GRID",        (0,0), (-1,-1), 0.3, MID_GREY),
-                ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, LIGHT_GREY]),
-                ("PADDING",     (0,0), (-1,-1), 5),
-                ("ALIGN",       (2,0), (-1,-1), "CENTER"),
+                ("BACKGROUND",     (0,0), (-1,0), NAVY),
+                ("GRID",           (0,0), (-1,-1), 0.3, MID_GREY),
+                ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, LIGHT_GREY]),
+                ("PADDING",        (0,0), (-1,-1), 5),
+                ("VALIGN",         (0,0), (-1,-1), "TOP"),
             ])
-            # Highlight best-fit row
+            # Highlight best-fit row green
             jmts.add("BACKGROUND", (0,1), (-1,1), colors.HexColor("#e8f8f5"))
             jmts.add("FONTNAME",   (0,1), (-1,1), "Helvetica-Bold")
-            jd_match_table.setStyle(jmts)
-            elements.append(jd_match_table)
-
-            # HR recommendation sentence
-            elements.append(Spacer(1, 0.15*cm))
+            jd_t.setStyle(jmts)
+            elements.append(jd_t)
+ 
+            elements.append(Spacer(1, 0.12*cm))
             if not_primary:
                 elements.append(Paragraph(
                     f"💡 HR Recommendation: Consider {s.candidate_name} for "
-                    f"<b>{best_role}</b> instead of {primary_role}. "
-                    f"Similarity score {jd_matches[0]['similarity']:.3f} vs primary role.",
+                    f"{best_role} instead of the primary role.",
                     S["body"]))
-        else:
-            elements.append(Paragraph("No multi-JD data available.", S["small"]))
-
-        # ── Bias audit ────────────────────────────────────────
-        elements.append(Spacer(1, 0.2*cm))
-        bias_risk  = audit.get("bias_risk_level", "N/A")
+ 
+        # Bias
+        elements.append(Spacer(1, 0.15*cm))
+        bias_risk  = audit.get("bias_risk_level","N/A")
         bias_found = audit.get("bias_detected", False)
         elements.append(Paragraph(
-            f"<b>Bias Audit:</b> Risk Level: {bias_risk} | "
+            f"<b>Bias Audit:</b> Risk: {bias_risk}  |  "
             f"Detected: {'Yes — ' + ', '.join(audit.get('bias_types',[])) if bias_found else 'No'}",
             S["body"]))
-
+ 
         elements.append(Spacer(1, 0.3*cm))
         elements.append(HRFlowable(width="100%", thickness=0.5, color=MID_GREY))
-
+ 
     doc.build(elements)
     return output_path
