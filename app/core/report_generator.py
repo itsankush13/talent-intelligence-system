@@ -26,7 +26,7 @@ REC_COLOR = {
 REC_TEXT_COLOR = {
     "STRONG HIRE": colors.HexColor("#00cc66"),
     "HIRE":        colors.HexColor("#4ECDC4"),
-    "MAYBE":       colors.HexColor("#FFE66D"),
+    "MAYBE":       colors.HexColor("#f97316"),   # orange — readable on dark/light
     "NO HIRE":     RED,
 }
  
@@ -170,6 +170,7 @@ def generate_pdf_report(results: list, jd_structured: dict, output_path: str) ->
         Paragraph("Conf.",      hdr_style),
         Paragraph("Verdict",    hdr_style),
         Paragraph("Best-Fit Role", hdr_style),
+        Paragraph("Hiring Match",  hdr_style),
     ]]
  
     for i, r in enumerate(results, 1):
@@ -178,6 +179,10 @@ def generate_pdf_report(results: list, jd_structured: dict, output_path: str) ->
         verdict  = VERDICT_LABEL.get(s.hire_recommendation, s.hire_recommendation)
         vc       = REC_TEXT_COLOR.get(s.hire_recommendation, colors.black)
  
+        match_pct = getattr(s, 'hiring_match_pct', 0)
+        match_color = (colors.HexColor("#16a34a") if match_pct >= 70
+                       else colors.HexColor("#c2410c") if match_pct >= 50
+                       else colors.HexColor("#dc2626"))
         rank_rows.append([
             Paragraph(str(i),                  S["cell"]),
             Paragraph(s.candidate_name,        S["cell"]),
@@ -186,9 +191,12 @@ def generate_pdf_report(results: list, jd_structured: dict, output_path: str) ->
             Paragraph(verdict, ParagraphStyle("vc", fontSize=7, fontName="Helvetica-Bold",
                                                textColor=vc, wordWrap='CJK')),
             Paragraph(best,                    S["cell"]),
+            Paragraph(f"{match_pct}%", ParagraphStyle("hm", fontSize=8,
+                       fontName="Helvetica-Bold", textColor=match_color,
+                       wordWrap='CJK')),
         ])
  
-    rank_t = Table(rank_rows, colWidths=[1*cm, 4*cm, 1.8*cm, 1.5*cm, 4.2*cm, 4.5*cm])
+    rank_t = Table(rank_rows, colWidths=[0.8*cm, 3.2*cm, 1.6*cm, 1.3*cm, 3.8*cm, 3.5*cm, 2.8*cm])
     rts = TableStyle([
         ("BACKGROUND",     (0,0), (-1,0), NAVY),
         ("GRID",           (0,0), (-1,-1), 0.3, MID_GREY),
@@ -215,10 +223,17 @@ def generate_pdf_report(results: list, jd_structured: dict, output_path: str) ->
         elements.append(Spacer(1, 0.4*cm))
  
         # Candidate name header
+        name_color = {
+            "STRONG HIRE": colors.HexColor("#16a34a"),
+            "HIRE":        colors.HexColor("#0891b2"),
+            "MAYBE":       colors.HexColor("#c2410c"),
+            "NO HIRE":     colors.HexColor("#dc2626"),
+        }.get(rec, NAVY)
+
         elements.append(Paragraph(
             f"#{rank}  {s.candidate_name}",
             ParagraphStyle("CH", parent=S["h2"], fontSize=12,
-                           textColor=REC_TEXT_COLOR.get(rec, colors.black),
+                           textColor=name_color,
                            spaceBefore=4)))
  
         # Verdict badge
@@ -293,7 +308,7 @@ def generate_pdf_report(results: list, jd_structured: dict, output_path: str) ->
         elements.append(Paragraph(f"<b>Missing Skills:</b> {missing_str}", S["body"]))
         elements.append(Spacer(1, 0.1*cm))
         elements.append(Paragraph(
-            f"<b>AI Reasoning:</b> {s.shortlist_reasoning or '—'}", S["body"]))
+            f"<b>REASON :</b> {s.shortlist_reasoning or '—'}", S["body"]))
         elements.append(Spacer(1, 0.25*cm))
  
         # Role fit analysis
