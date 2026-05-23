@@ -1,10 +1,32 @@
+# Core UI & API
 streamlit
 fastapi
 uvicorn
+python-dotenv
+pydantic
+
+# LLM & Groq
+groq
+
+# Embeddings & Vector Search
+sentence-transformers
+faiss-cpu
+
+# Lexical Search
+rank-bm25
+
+# Resume Parsing
+pymupdf
+spacy
+
+# Data & Viz
 pandas
 numpy
 scikit-learn
-google-generativeai
-python-dotenv
-pydantic
 plotly
+
+# PDF Report Generation
+reportlab
+
+# Other
+python-multipart
