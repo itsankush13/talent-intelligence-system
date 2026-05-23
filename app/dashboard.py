@@ -10,6 +10,8 @@ def verdict_badge(rec: str) -> str:
         return '<span style="background:#2d0f0f;color:#ef4444;border:1px solid #991b1b;padding:3px 10px;border-radius:20px;font-size:0.72rem;font-weight:700;font-family:monospace;">NOT SUITABLE FOR HIRING</span>'
 from app.core.pipeline import run_pipeline
 from app.core.knowledge_graph import plot_multi_jd_graph
+from app.core.heatmap import build_heatmap
+from app.core.knowledge_graph import plot_multi_jd_graph
 from app.core.skill_gap_forecaster import compute_transferability
 from app.core.report_generator import generate_pdf_report
 from app.core.heatmap import build_heatmap
@@ -73,7 +75,7 @@ div[data-testid="stExpander"] {
 """, unsafe_allow_html=True)
 
 # ── Hero ──────────────────────────────────────────────────────────────────────
-st.markdown('<div class="hero-title">TALENT HUNTER</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-title">TALENT HUNTING INTELLIGENCE SYSTEM</div>', unsafe_allow_html=True)
 st.markdown('<div class="hero-sub">Multi-Agent · Hybrid RAG · Explainable AI · Bias-Aware · Skill Intelligence</div>', unsafe_allow_html=True)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -260,6 +262,15 @@ if "results" in st.session_state:
     st.dataframe(table_rows, use_container_width=True,
                  height=min(400, 80 + len(results)*45))
 
+# ── Knowledge Graph ───────────────────────────────────────
+    st.markdown("#### 🕸️ Candidate × Role Intelligence Graph")
+    st.caption("Hexagons = roles · Circles = candidates · Bright edge = best-fit role")
+    st.plotly_chart(plot_multi_jd_graph(results), use_container_width=True)
+
+    # ── Competency Heatmap ────────────────────────────────────
+    st.markdown("#### 🌡️ Competency Heatmap")
+    st.caption("Red = strong · Blue = weak · Based on JD scoring dimensions")
+    st.plotly_chart(build_heatmap(results), use_container_width=True)
     st.markdown("#### 🔍 Candidate Breakdown")
     for rank, r in enumerate(results, 1):
         s          = r["score"]
@@ -360,6 +371,8 @@ if "results" in st.session_state:
                     st.session_state.results[idx]["score"].hire_recommendation = new_rec
                     st.session_state.results.sort(
                         key=lambda x: x["score"].weighted_total, reverse=True)
+                    if "override_log" not in st.session_state:
+                        st.session_state.override_log = []
                     st.session_state.override_log.append({
                         "candidate":  s.candidate_name,
                         "old_score":  s.weighted_total,
