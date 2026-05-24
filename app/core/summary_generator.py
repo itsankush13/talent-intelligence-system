@@ -1,0 +1,37 @@
+from langchain_groq import ChatGroq
+from langchain_core.messages import SystemMessage, HumanMessage
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+from config import settings
+
+llm = ChatGroq(model=settings.model_name, api_key=settings.groq_api_key, temperature=0.5)
+
+def generate_hiring_summary(results: list, jd_structured: dict, company: str = "Our Company") -> str:
+    role = jd_structured.get("role_title", "the role")
+    total = len(results)
+    shortlisted = [r for r in results if r["score"].hire_recommendation in ["HIRE", "STRONG HIRE"]]
+    candidates_summary = "\n".join([
+        f"- {r['score'].candidate_name}: {r['score'].weighted_total}/10 — {r['score'].hire_recommendation}"
+        for r in results
+    ])
+    prompt = f"""Write a professional executive summary email for a hiring manager.
+
+Role: {role} at {company}
+Total Screened: {total}
+Shortlisted: {len(shortlisted)}
+Top candidate: {results[0]['score'].candidate_name} ({results[0]['score'].weighted_total}/10)
+Top strengths: {', '.join(results[0]['score'].matched_skills[:5])}
+
+All candidates:
+{candidates_summary}
+
+Write a concise 150-word email that:
+1. States total screened and shortlisted
+2. Highlights top 2 candidates with key strengths
+3. Recommends next steps
+Professional tone suitable for C-suite."""
+    response = llm.invoke([
+        SystemMessage(content="You write concise executive HR summary emails."),
+        HumanMessage(content=prompt)
+    ])
+    return response.content.strip()

@@ -1,0 +1,213 @@
+import sqlite3
+import secrets
+import hashlib
+import argparse
+from datetime import datetime, timedelta
+
+DB_PATH = "tenants.db"
+
+PLAN_LIMITS = {
+    "trial":      {"resumes": 10,     "days": 2,    "price": 0},
+    "starter":    {"resumes": 50,     "days": 30,   "price": 2999},
+    "growth":     {"resumes": 200,    "days": 30,   "price": 7999},
+    "enterprise": {"resumes": 999999, "days": 30,   "price": 24999},
+}
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS tenants (
+            id              TEXT PRIMARY KEY,
+            company_name    TEXT NOT NULL,
+            hr_name         TEXT NOT NULL,
+            email           TEXT UNIQUE NOT NULL,
+            phone           TEXT UNIQUE NOT NULL,
+            api_key_hash    TEXT UNIQUE NOT NULL,
+            plan            TEXT DEFAULT 'trial',
+            is_active       INTEGER DEFAULT 1,
+            is_paid         INTEGER DEFAULT 0,
+            resumes_used    INTEGER DEFAULT 0,
+            resumes_limit   INTEGER DEFAULT 10,
+            created_at      TEXT NOT NULL,
+            expires_at      TEXT NOT NULL,
+            notes           TEXT DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS otp_store (
+            phone_or_email  TEXT PRIMARY KEY,
+            otp_hash        TEXT NOT NULL,
+            expires_at      TEXT NOT NULL,
+            attempts        INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_token   TEXT PRIMARY KEY,
+            tenant_id       TEXT NOT NULL,
+            created_at      TEXT NOT NULL,
+            expires_at      TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id       TEXT,
+            action          TEXT,
+            detail          TEXT,
+            timestamp       TEXT
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+def log_action(tenant_id: str, action: str, detail: str = ""):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO audit_log (tenant_id, action, detail, timestamp) VALUES (?,?,?,?)",
+        (tenant_id, action, detail, datetime.utcnow().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+def add_tenant(company: str, hr_name: str, email: str,
+               phone: str, plan: str = "trial") -> str:
+    init_db()
+    raw_key  = "tis_" + secrets.token_urlsafe(32)
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    tenant_id = company.lower().replace(" ", "-")[:20] + "-" + secrets.token_hex(3)
+    plan_info = PLAN_LIMITS[plan]
+    expires   = (datetime.utcnow() + timedelta(days=plan_info["days"])).isoformat()
+    is_paid   = 0 if plan == "trial" else 0  # always 0 until you confirm payment
+
+    conn = get_db()
+    conn.execute("""
+        INSERT INTO tenants
+        (id, company_name, hr_name, email, phone, api_key_hash,
+         plan, is_active, is_paid, resumes_used, resumes_limit, created_at, expires_at)
+        VALUES (?,?,?,?,?,?,?,1,?,0,?,?,?)
+    """, (tenant_id, company, hr_name, email, phone, key_hash,
+          plan, is_paid, plan_info["resumes"],
+          datetime.utcnow().isoformat(), expires))
+    conn.commit()
+    conn.close()
+    log_action(tenant_id, "CREATED", f"plan={plan}")
+
+    print(f"\n✅ Tenant created!")
+    print(f"   Company:   {company}")
+    print(f"   HR Name:   {hr_name}")
+    print(f"   Plan:      {plan} ({plan_info['resumes']} resumes, {plan_info['days']} days)")
+    print(f"   Expires:   {expires[:10]}")
+    print(f"\n   ── API KEY (send to company) ──")
+    print(f"   {raw_key}")
+    print(f"\n   ── DASHBOARD URL ──")
+    print(f"   https://your-domain.com  OR  http://localhost:8501")
+    print(f"   Login with: {phone} or {email}\n")
+    return raw_key
+
+def confirm_payment(email: str, plan: str, months: int = 1):
+    init_db()
+    plan_info = PLAN_LIMITS[plan]
+    new_expiry = (datetime.utcnow() + timedelta(days=30 * months)).isoformat()
+    conn = get_db()
+    conn.execute("""
+        UPDATE tenants
+        SET plan=?, is_paid=1, is_active=1,
+            resumes_used=0, resumes_limit=?, expires_at=?
+        WHERE email=?
+    """, (plan, plan_info["resumes"], new_expiry, email))
+    conn.commit()
+    conn.close()
+    log_action(email, "PAYMENT_CONFIRMED", f"plan={plan}, months={months}")
+    print(f"✅ Payment confirmed for {email}")
+    print(f"   Plan: {plan} | Resumes: {plan_info['resumes']} | Expires: {new_expiry[:10]}")
+
+def block_tenant(email: str, reason: str = "Non-payment"):
+    init_db()
+    conn = get_db()
+    conn.execute("UPDATE tenants SET is_active=0 WHERE email=?", (email,))
+    conn.commit()
+    conn.close()
+    log_action(email, "BLOCKED", reason)
+    print(f"🔴 Blocked: {email} — {reason}")
+
+def unblock_tenant(email: str):
+    init_db()
+    conn = get_db()
+    conn.execute("UPDATE tenants SET is_active=1 WHERE email=?", (email,))
+    conn.commit()
+    conn.close()
+    log_action(email, "UNBLOCKED", "")
+    print(f"✅ Unblocked: {email}")
+
+def list_tenants():
+    init_db()
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT company_name, hr_name, phone, plan,
+               resumes_used, resumes_limit, is_active,
+               is_paid, expires_at
+        FROM tenants ORDER BY created_at DESC
+    """).fetchall()
+    conn.close()
+    print(f"\n{'Company':<18} {'HR':<14} {'Phone':<13} {'Plan':<10} {'Used':<6} {'Limit':<7} {'Active':<8} {'Paid':<6} {'Expires'}")
+    print("─" * 100)
+    for r in rows:
+        active = "✅" if r["is_active"] else "🔴"
+        paid   = "✅" if r["is_paid"]   else "❌"
+        print(f"{r['company_name']:<18} {r['hr_name']:<14} {r['phone']:<13} "
+              f"{r['plan']:<10} {r['resumes_used']:<6} {r['resumes_limit']:<7} "
+              f"{active:<8} {paid:<6} {r['expires_at'][:10]}")
+
+def check_expired():
+    """Run this daily to auto-block expired tenants."""
+    init_db()
+    conn = get_db()
+    now = datetime.utcnow().isoformat()
+    expired = conn.execute("""
+        SELECT id, company_name, email FROM tenants
+        WHERE expires_at < ? AND is_active = 1
+    """, (now,)).fetchall()
+    for t in expired:
+        conn.execute("UPDATE tenants SET is_active=0 WHERE id=?", (t["id"],))
+        log_action(t["id"], "AUTO_BLOCKED", "Subscription expired")
+        print(f"🔴 Auto-blocked: {t['company_name']} ({t['email']})")
+    conn.commit()
+    conn.close()
+    if not expired:
+        print("✅ No expired tenants")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--add",             action="store_true")
+    parser.add_argument("--list",            action="store_true")
+    parser.add_argument("--block",           action="store_true")
+    parser.add_argument("--unblock",         action="store_true")
+    parser.add_argument("--confirm-payment", action="store_true")
+    parser.add_argument("--check-expired",   action="store_true")
+    parser.add_argument("--company",  type=str, default="")
+    parser.add_argument("--hr-name",  type=str, default="")
+    parser.add_argument("--email",    type=str, default="")
+    parser.add_argument("--phone",    type=str, default="")
+    parser.add_argument("--plan",     type=str, default="trial",
+                        choices=["trial","starter","growth","enterprise"])
+    parser.add_argument("--months",   type=int, default=1)
+    parser.add_argument("--reason",   type=str, default="Non-payment")
+    args = parser.parse_args()
+
+    if args.add:
+        add_tenant(args.company, args.hr_name, args.email, args.phone, args.plan)
+    elif args.list:
+        list_tenants()
+    elif args.block:
+        block_tenant(args.email, args.reason)
+    elif args.unblock:
+        unblock_tenant(args.email)
+    elif args.confirm_payment:
+        confirm_payment(args.email, args.plan, args.months)
+    elif args.check_expired:
+        check_expired()
+    else:
+        parser.print_help()

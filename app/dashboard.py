@@ -1,5 +1,173 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import subprocess, sys
+from app.core.auth import (send_phone_otp, send_email_otp,
+                            verify_otp, create_session,
+                            validate_session, get_tenant_by_identifier)
+
+def show_login_page():
+    """Full login page with OTP authentication."""
+    st.markdown("""
+    <div style="max-width:420px;margin:80px auto;">
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div style="text-align:center;margin-bottom:32px;">
+        <div style="font-size:2.5rem;">🧠</div>
+        <div style="font-size:1.6rem;font-weight:800;
+                    background:linear-gradient(135deg,#6366f1,#8b5cf6);
+                    -webkit-background-clip:text;-webkit-text-fill-color:transparent;">
+            Talent Intelligence System
+        </div>
+        <div style="color:#64748b;font-size:0.85rem;margin-top:6px;">
+            Sign in to your organisation account
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if "login_step" not in st.session_state:
+        st.session_state.login_step = "identifier"
+    if "login_identifier" not in st.session_state:
+        st.session_state.login_identifier = ""
+    if "login_method" not in st.session_state:
+        st.session_state.login_method = "phone"
+
+    # ── Step 1: Enter phone or email ──────────────────────────
+    if st.session_state.login_step == "identifier":
+        method = st.radio("Login with", ["📱 Phone Number", "📧 Email"],
+                          horizontal=True, label_visibility="collapsed")
+        st.session_state.login_method = "phone" if "Phone" in method else "email"
+
+        if st.session_state.login_method == "phone":
+            identifier = st.text_input("Phone Number",
+                                        placeholder="+91 98765 43210",
+                                        help="Enter with country code e.g. +91")
+        else:
+            identifier = st.text_input("Email Address",
+                                        placeholder="hr@yourcompany.com")
+
+        if st.button("Send OTP", type="primary", use_container_width=True):
+            if not identifier.strip():
+                st.error("Please enter your phone number or email.")
+            else:
+                tenant = get_tenant_by_identifier(identifier.strip())
+                if not tenant:
+                    st.error("Account not found. Contact support to get access.")
+                elif not tenant["is_active"]:
+                    st.error("Your account is suspended. Please contact support.")
+                else:
+                    with st.spinner("Sending OTP..."):
+                        if st.session_state.login_method == "phone":
+                            send_phone_otp(identifier.strip())
+                        else:
+                            send_email_otp(identifier.strip())
+                    st.session_state.login_identifier = identifier.strip()
+                    st.session_state.login_step = "otp"
+                    st.rerun()
+
+    # ── Step 2: Enter OTP ─────────────────────────────────────
+    elif st.session_state.login_step == "otp":
+        identifier = st.session_state.login_identifier
+        st.success(f"OTP sent to {identifier}")
+        st.caption("Check your messages. OTP is valid for 10 minutes.")
+
+        otp_input = st.text_input("Enter 6-digit OTP",
+                                   placeholder="_ _ _ _ _ _",
+                                   max_chars=6)
+
+        col1, col2 = st.columns(2)
+        if col1.button("Verify OTP", type="primary", use_container_width=True):
+            if len(otp_input.strip()) != 6:
+                st.error("Please enter the 6-digit OTP.")
+            else:
+                success, error_msg = verify_otp(identifier, otp_input.strip())
+                if success:
+                    tenant = get_tenant_by_identifier(identifier)
+
+                    # Check subscription status
+                    from datetime import datetime
+                    sub_expired = (datetime.fromisoformat(tenant["expires_at"])
+                                   < datetime.utcnow())
+
+                    if sub_expired or not tenant["is_active"]:
+                        st.error("Your subscription has expired or been suspended. "
+                                 "Please contact support to renew.")
+                    else:
+                        token = create_session(tenant["id"])
+                        st.session_state.session_token = token
+                        st.session_state.tenant = {
+                            "company":  tenant["company_name"],
+                            "hr_name":  tenant["hr_name"],
+                            "plan":     tenant["plan"],
+                            "used":     tenant["resumes_used"],
+                            "limit":    tenant["resumes_limit"],
+                            "expires":  tenant["expires_at"][:10],
+                        }
+                        from manage_tenants import log_action
+                        log_action(tenant["id"], "LOGIN",
+                                   f"via {st.session_state.login_method}")
+                        st.session_state.login_step = "identifier"
+                        st.rerun()
+                else:
+                    st.error(error_msg)
+
+        if col2.button("Resend OTP", use_container_width=True):
+            with st.spinner("Resending..."):
+                if st.session_state.login_method == "phone":
+                    send_phone_otp(identifier)
+                else:
+                    send_email_otp(identifier)
+            st.success("OTP resent!")
+
+        if st.button("← Back", type="secondary"):
+            st.session_state.login_step = "identifier"
+            st.rerun()
+
+    st.markdown("""
+    <div style="text-align:center;margin-top:32px;color:#475569;font-size:0.78rem;">
+        Don't have access? Contact us to get started.
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.stop()
+
+
+# ── Gate: show login if not authenticated ─────────────────────────────────
+if "session_token" not in st.session_state:
+    show_login_page()
+
+# Validate existing session on every page load
+tenant_session = validate_session(st.session_state.get("session_token", ""))
+if not tenant_session:
+    # Session expired or invalid — force re-login
+    for key in ["session_token", "tenant", "results", "jd_struct"]:
+        st.session_state.pop(key, None)
+    show_login_page()
+
+# Update tenant info
+st.session_state.tenant = {
+    "company": tenant_session["company_name"],
+    "hr_name": tenant_session["hr_name"],
+    "plan":    tenant_session["plan"],
+    "used":    tenant_session["resumes_used"],
+    "limit":   tenant_session["resumes_limit"],
+    "expires": tenant_session["sub_expires"][:10],
+}
+
+def download_spacy_model():
+    try:
+        import spacy
+        spacy.load("en_core_web_sm")
+    except OSError:
+        subprocess.run([sys.executable, "-m", "spacy", "download", "en_core_web_sm"], check=True)
+
+download_spacy_model()
+import os, streamlit as st
+
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 import streamlit as st
 import tempfile, os
+
 REC_ICON = {"STRONG HIRE":"🟢","HIRE":"🔵","MAYBE":"🟡","NO HIRE":"🔴"}
 def verdict_badge(rec: str) -> str:
     if rec in ["STRONG HIRE", "HIRE"]:
@@ -9,6 +177,25 @@ def verdict_badge(rec: str) -> str:
     else:
         return '<span style="background:#2d0f0f;color:#ef4444;border:1px solid #991b1b;padding:3px 10px;border-radius:20px;font-size:0.72rem;font-weight:700;font-family:monospace;">NOT SUITABLE FOR HIRING</span>'
 from app.core.pipeline import run_pipeline
+
+# Add core folder to path for HR tool modules
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), 'core'))
+
+from hr_chatbot import ask_hr_chatbot
+from candidate_comparator import compare_candidates
+from interview_generator import generate_interview_questions
+from summary_generator import generate_hiring_summary
+try:
+    from app.core.hr_chatbot import ask_hr_chatbot
+    from app.core.candidate_comparator import compare_candidates
+    from app.core.interview_generator import generate_interview_questions
+    from app.core.summary_generator import generate_hiring_summary
+    HR_TOOLS_AVAILABLE = True
+except Exception as e:
+    HR_TOOLS_AVAILABLE = False
+    print(f"HR Tools not loaded: {e}")
+
 from app.core.knowledge_graph import plot_multi_jd_graph
 from app.core.heatmap import build_heatmap
 from app.core.knowledge_graph import plot_multi_jd_graph
@@ -89,7 +276,23 @@ with st.sidebar:
     st.divider()
     st.markdown("**Stack**")
     st.code("LLM  : Llama-3.3-70b (Groq)\nEmbed: MiniLM-L6-v2\nRAG  : FAISS + BM25\nUI   : Streamlit", language="yaml")
-
+# Tenant info + logout
+    st.sidebar.divider()
+    tenant = st.session_state.get("tenant", {})
+    st.sidebar.markdown(f"""
+    <div style="padding:8px;background:#0d1220;border-radius:8px;
+                border:1px solid #1e2d45;font-size:0.75rem;">
+        <div style="color:#f1f5f9;font-weight:600;">{tenant.get('company','')}</div>
+        <div style="color:#64748b;">👤 {tenant.get('hr_name','')}</div>
+        <div style="color:#64748b;">📋 {tenant.get('plan','').title()} plan</div>
+        <div style="color:#64748b;">📄 {tenant.get('used',0)}/{tenant.get('limit',0)} resumes</div>
+        <div style="color:#64748b;">⏰ Expires: {tenant.get('expires','')}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    if st.sidebar.button("🚪 Logout", use_container_width=True):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
 # ══════════════════════════════════════════════════════════════════════════════
 # INPUT SECTION
 # ══════════════════════════════════════════════════════════════════════════════
@@ -545,6 +748,126 @@ if "results" in st.session_state:
                             st.success(msg)
                         else:
                             st.error(msg)
+
+
+    # ── HR Tools Section ──────────────────────────────────────
+    st.divider()
+    st.markdown('<div class="section-label">05 — HR Tools</div>', unsafe_allow_html=True)
+    st.markdown("#### 🛠️ HR Intelligence Tools")
+
+    tool_tab1, tool_tab2, tool_tab3, tool_tab4 = st.tabs([
+        "💬 HR Chatbot",
+        "⚖️ Compare Candidates",
+        "🎯 Interview Questions",
+        "📋 Hiring Summary"
+    ])
+
+    with tool_tab1:
+        st.markdown("### 💬 Ask Anything About Your Candidates")
+        st.caption("Ask in plain English — the AI will query your candidate data")
+        examples = [
+            "Who is best at Python?",
+            "Which candidate has the most LLM experience?",
+            "Who should I interview first and why?",
+            "Which candidate is weakest in experience?",
+            "Summarize all candidates in 3 sentences",
+        ]
+        cols = st.columns(3)
+        for i, ex in enumerate(examples):
+            if cols[i % 3].button(ex, key=f"ex_{i}", type="secondary"):
+                st.session_state.chatbot_input = ex
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = []
+        for msg in st.session_state.chat_history:
+            if msg["role"] == "user":
+                st.markdown(f'''<div style="background:#1e3a5f;border-radius:10px;padding:10px 14px;margin:8px 0;font-size:0.88rem;">👤 {msg["content"]}</div>''', unsafe_allow_html=True)
+            else:
+                st.markdown(f'''<div style="background:#111827;border:1px solid #1e2d45;border-radius:10px;padding:10px 14px;margin:8px 0;font-size:0.88rem;">🧠 {msg["content"]}</div>''', unsafe_allow_html=True)
+        user_input = st.text_input("Ask HR Chatbot", value=st.session_state.get("chatbot_input",""),
+                                    placeholder="e.g. Show me candidates best in Python...",
+                                    key="chat_input_box", label_visibility="collapsed")
+        col_send, col_clear = st.columns([1, 5])
+        if col_send.button("Send", type="primary", key="send_chat"):
+            if user_input.strip():
+                with st.spinner("Thinking..."):
+                    response = ask_hr_chatbot(user_input, results, st.session_state.chat_history)
+                st.session_state.chat_history.append({"role":"user","content":user_input})
+                st.session_state.chat_history.append({"role":"assistant","content":response})
+                st.session_state.chatbot_input = ""
+                st.rerun()
+        if col_clear.button("Clear Chat", type="secondary", key="clear_chat"):
+            st.session_state.chat_history = []
+            st.rerun()
+
+    with tool_tab2:
+        st.markdown("### ⚖️ Head-to-Head Candidate Comparison")
+        candidate_names = [r["score"].candidate_name for r in results]
+        c1, c2 = st.columns(2)
+        cand_a = c1.selectbox("Candidate A", candidate_names, key="cmp_a")
+        cand_b = c2.selectbox("Candidate B", candidate_names, index=min(1,len(candidate_names)-1), key="cmp_b")
+        if st.button("⚖️ Compare Now", type="primary", key="do_compare"):
+            if cand_a == cand_b:
+                st.error("Please select two different candidates.")
+            else:
+                result_a = next(r for r in results if r["score"].candidate_name == cand_a)
+                result_b = next(r for r in results if r["score"].candidate_name == cand_b)
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    sa = result_a["score"]
+                    color_a = "#22c55e" if sa.weighted_total >= 7 else "#f59e0b" if sa.weighted_total >= 5 else "#ef4444"
+                    st.markdown(f'''<div style="background:#111827;border:1px solid #1e2d45;border-radius:12px;padding:16px;text-align:center;"><div style="font-size:1.1rem;font-weight:700;color:#f1f5f9;">{cand_a}</div><div style="font-size:2.5rem;font-weight:800;color:{color_a};">{sa.weighted_total}/10</div><div style="font-size:0.8rem;color:#64748b;">{sa.hire_recommendation}</div></div>''', unsafe_allow_html=True)
+                with col_b:
+                    sb = result_b["score"]
+                    color_b = "#22c55e" if sb.weighted_total >= 7 else "#f59e0b" if sb.weighted_total >= 5 else "#ef4444"
+                    st.markdown(f'''<div style="background:#111827;border:1px solid #1e2d45;border-radius:12px;padding:16px;text-align:center;"><div style="font-size:1.1rem;font-weight:700;color:#f1f5f9;">{cand_b}</div><div style="font-size:2.5rem;font-weight:800;color:{color_b};">{sb.weighted_total}/10</div><div style="font-size:0.8rem;color:#64748b;">{sb.hire_recommendation}</div></div>''', unsafe_allow_html=True)
+                st.markdown("**📐 Dimension Comparison**")
+                for dim_a in result_a["score"].dimensions:
+                    dim_b_score = next((d.score for d in result_b["score"].dimensions if d.name == dim_a.name), 0)
+                    dc1, dc2, dc3 = st.columns([2,3,3])
+                    dc1.markdown(f"<div style='font-size:0.78rem;color:#94a3b8;padding-top:6px;'>{dim_a.name}</div>", unsafe_allow_html=True)
+                    dc2.progress(dim_a.score/10, text=f"{cand_a.split()[0]}: {dim_a.score}/10")
+                    dc3.progress(dim_b_score/10, text=f"{cand_b.split()[0]}: {dim_b_score}/10")
+                st.markdown("**🧠 AI Analysis**")
+                with st.spinner("Generating AI comparison..."):
+                    comparison = compare_candidates(result_a, result_b)
+                st.info(comparison)
+
+    with tool_tab3:
+        st.markdown("### 🎯 Personalized Interview Question Generator")
+        selected = st.selectbox("Select Candidate", [r["score"].candidate_name for r in results], key="iq_select")
+        num_q = st.slider("Number of Questions", 5, 15, 8, key="iq_num")
+        if st.button("🎯 Generate Questions", type="primary", key="gen_iq"):
+            candidate_result = next(r for r in results if r["score"].candidate_name == selected)
+            with st.spinner("Generating personalized questions..."):
+                try:
+                    questions = generate_interview_questions(candidate_result, jd_structured, num_q)
+                    categories = {
+                        "technical":   ("🔧 Technical Depth", "#3b82f6"),
+                        "gap_probe":   ("🔍 Gap Probe",       "#f59e0b"),
+                        "behavioural": ("💼 Behavioural",     "#8b5cf6"),
+                        "culture_fit": ("🤝 Culture Fit",     "#22c55e"),
+                        "motivation":  ("🎯 Motivation",      "#14b8a6"),
+                    }
+                    for key, (label, color) in categories.items():
+                        qs = questions.get(key, [])
+                        if qs:
+                            st.markdown(f"**{label}**")
+                            for i, q in enumerate(qs, 1):
+                                st.markdown(f'''<div style="background:#111827;border-left:3px solid {color};border-radius:6px;padding:10px 14px;margin:6px 0;font-size:0.88rem;color:#e2e8f0;">{i}. {q}</div>''', unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    with tool_tab4:
+        st.markdown("### 📋 Executive Hiring Summary")
+        company_name = st.text_input("Company Name", value=settings.company_name, key="sum_company")
+        if st.button("📋 Generate Summary", type="primary", key="gen_sum"):
+            with st.spinner("Generating..."):
+                summary = generate_hiring_summary(results, jd_structured, company_name)
+                st.session_state["hiring_summary"] = summary
+        if "hiring_summary" in st.session_state:
+            edited_summary = st.text_area("Edit Summary", value=st.session_state["hiring_summary"], height=300, key="sum_edit")
+            st.download_button("⬇️ Download Summary", edited_summary, "hiring_summary.txt", use_container_width=True)
+
 
     # ── PDF Report ────────────────────────────────────────────
     st.divider()
