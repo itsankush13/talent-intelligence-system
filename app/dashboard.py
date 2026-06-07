@@ -9,6 +9,7 @@ from app.core.auth import (
     send_phone_otp, send_email_otp, verify_otp,
     create_session, validate_session,
     get_tenant_by_identifier, log_action,
+    verify_password_login,
 )
 
 REC_ICON = {"STRONG HIRE":"🟢","HIRE":"🔵","MAYBE":"🟡","NO HIRE":"🔴"}
@@ -136,81 +137,128 @@ def show_login_page():
         </div>
         """, unsafe_allow_html=True)
 
-    if "login_step" not in st.session_state:
-        st.session_state.login_step = "identifier"
+    # ── LOGIN METHOD TOGGLE ──────────────────────────────────────────────────
+    login_method = st.radio(
+        "Login Method",
+        ["🔑 OTP Login", "🔒 Username & Password"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="global_login_method"
+    )
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    if st.session_state.login_step == "identifier":
-        method = st.radio("", ["📱 Phone Number", "📧 Email Address"],
-                          horizontal=True, label_visibility="collapsed")
-        st.session_state.login_method = "phone" if "Phone" in method else "email"
+    # ════════════════════════════════════════════════════════════════════════
+    # PATH B — Username & Password
+    # ════════════════════════════════════════════════════════════════════════
+    if login_method == "🔒 Username & Password":
+        username = st.text_input("Username", placeholder="your.username")
+        password = st.text_input("Password", type="password", placeholder="••••••••")
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.session_state.login_method == "phone":
-            identifier = st.text_input("Phone Number", placeholder="+91 98765 43210")
-        else:
-            identifier = st.text_input("Email Address", placeholder="hr@yourcompany.com")
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Send OTP →", type="primary", use_container_width=True):
-            if not identifier.strip():
-                st.error("Please enter your phone or email.")
+        if st.button("Login →", type="primary", use_container_width=True):
+            if not username.strip() or not password.strip():
+                st.error("Please enter both username and password.")
             else:
-                tenant = get_tenant_by_identifier(identifier.strip())
-                if not tenant:
-                    st.error("Account not found. Contact TechXdigisolutions.")
-                elif not tenant["is_active"]:
-                    st.error("Account suspended. Contact support.")
+                with st.spinner("Verifying..."):
+                    tenant_row, err = verify_password_login(username, password)
+                if err:
+                    st.error(err)
                 else:
-                    with st.spinner("Sending OTP..."):
-                        if st.session_state.login_method == "phone":
-                            send_phone_otp(identifier.strip())
-                        else:
-                            send_email_otp(identifier.strip())
-                    st.session_state.login_identifier = identifier.strip()
-                    st.session_state.login_step = "otp"
+                    token = create_session(tenant_row["tenant_id"])
+                    st.session_state.session_token = token
+                    st.session_state.tenant = {
+                        "id":      tenant_row["tenant_id"],
+                        "company": tenant_row["company_name"],
+                        "hr_name": tenant_row["hr_name"],
+                        "plan":    tenant_row["plan"],
+                        "used":    tenant_row["resumes_used"],
+                        "limit":   tenant_row["resumes_limit"],
+                        "expires": tenant_row["expires_at"][:10],
+                    }
+                    log_action(tenant_row["tenant_id"], "LOGIN_PASSWORD", username)
                     st.rerun()
 
-    elif st.session_state.login_step == "otp":
-        identifier = st.session_state.get("login_identifier", "")
-        masked = identifier[:3] + "•"*(len(identifier)-6) + identifier[-3:] if len(identifier)>6 else identifier
-        st.success(f"✅ OTP sent to **{masked}**")
-        st.caption("Check your terminal if email/SMS not configured. Valid 10 minutes.")
-        st.markdown("<br>", unsafe_allow_html=True)
-        otp_input = st.text_input("6-digit OTP", placeholder="0  0  0  0  0  0", max_chars=6)
-        st.markdown("<br>", unsafe_allow_html=True)
-        c1, c2 = st.columns([3, 2])
-        if c1.button("Verify & Login →", type="primary", use_container_width=True):
-            if len(otp_input.strip()) != 6:
-                st.error("Enter the 6-digit OTP.")
-            else:
-                success, err = verify_otp(identifier, otp_input.strip())
-                if success:
-                    tenant = get_tenant_by_identifier(identifier)
-                    from datetime import datetime as dt
-                    if dt.fromisoformat(tenant["expires_at"]) < dt.utcnow() or not tenant["is_active"]:
-                        st.error("Subscription expired. Contact TechXdigisolutions.")
-                    else:
-                        token = create_session(tenant["id"])
-                        st.session_state.session_token = token
-                        st.session_state.tenant = {
-                            "id": tenant["id"], "company": tenant["company_name"],
-                            "hr_name": tenant["hr_name"], "plan": tenant["plan"],
-                            "used": tenant["resumes_used"], "limit": tenant["resumes_limit"],
-                            "expires": tenant["expires_at"][:10],
-                        }
-                        log_action(tenant["id"], "LOGIN", identifier)
-                        st.session_state.login_step = "identifier"
-                        st.rerun()
-                else:
-                    st.error(err)
-        if c2.button("Resend OTP", use_container_width=True):
-            if st.session_state.login_method == "phone":
-                send_phone_otp(identifier)
-            else:
-                send_email_otp(identifier)
-            st.success("OTP resent!")
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("← Use different contact", use_container_width=True):
+    # ════════════════════════════════════════════════════════════════════════
+    # PATH A — OTP
+    # ════════════════════════════════════════════════════════════════════════
+    else:
+        if "login_step" not in st.session_state:
             st.session_state.login_step = "identifier"
-            st.rerun()
+
+        if st.session_state.login_step == "identifier":
+            method = st.radio("Contact Method", ["📱 Phone Number", "📧 Email Address"],
+                              horizontal=True, label_visibility="collapsed")
+            st.session_state.login_method = "phone" if "Phone" in method else "email"
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.session_state.login_method == "phone":
+                identifier = st.text_input("Phone Number", placeholder="+91 98765 43210")
+            else:
+                identifier = st.text_input("Email Address", placeholder="hr@yourcompany.com")
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Send OTP →", type="primary", use_container_width=True):
+                if not identifier.strip():
+                    st.error("Please enter your phone or email.")
+                else:
+                    tenant = get_tenant_by_identifier(identifier.strip())
+                    if not tenant:
+                        st.error("Account not found. Contact TechXdigisolutions.")
+                    elif not tenant["is_active"]:
+                        st.error("Account suspended. Contact support.")
+                    else:
+                        with st.spinner("Sending OTP..."):
+                            if st.session_state.login_method == "phone":
+                                send_phone_otp(identifier.strip())
+                            else:
+                                ok, err = send_email_otp(identifier.strip())
+                                if not ok:
+                                    st.error(f"Failed to send OTP: {err}")
+                                    st.stop()
+                        st.session_state.login_identifier = identifier.strip()
+                        st.session_state.login_step = "otp"
+                        st.rerun()
+
+        elif st.session_state.login_step == "otp":
+            identifier = st.session_state.get("login_identifier", "")
+            masked = identifier[:3] + "•"*(len(identifier)-6) + identifier[-3:] if len(identifier)>6 else identifier
+            st.success(f"✅ OTP sent to **{masked}**")
+            st.caption("Check your terminal if email/SMS not configured. Valid 10 minutes.")
+            st.markdown("<br>", unsafe_allow_html=True)
+            otp_input = st.text_input("6-digit OTP", placeholder="0  0  0  0  0  0", max_chars=6)
+            st.markdown("<br>", unsafe_allow_html=True)
+            c1, c2 = st.columns([3, 2])
+            if c1.button("Verify & Login →", type="primary", use_container_width=True):
+                if len(otp_input.strip()) != 6:
+                    st.error("Enter the 6-digit OTP.")
+                else:
+                    success, err = verify_otp(identifier, otp_input.strip())
+                    if success:
+                        tenant = get_tenant_by_identifier(identifier)
+                        from datetime import datetime as dt
+                        if dt.fromisoformat(tenant["expires_at"]) < dt.utcnow() or not tenant["is_active"]:
+                            st.error("Subscription expired. Contact TechXdigisolutions.")
+                        else:
+                            token = create_session(tenant["id"])
+                            st.session_state.session_token = token
+                            st.session_state.tenant = {
+                                "id": tenant["id"], "company": tenant["company_name"],
+                                "hr_name": tenant["hr_name"], "plan": tenant["plan"],
+                                "used": tenant["resumes_used"], "limit": tenant["resumes_limit"],
+                                "expires": tenant["expires_at"][:10],
+                            }
+                            log_action(tenant["id"], "LOGIN", identifier)
+                            st.session_state.login_step = "identifier"
+                            st.rerun()
+                    else:
+                        st.error(err)
+            if c2.button("Resend OTP", use_container_width=True):
+                if st.session_state.login_method == "phone":
+                    send_phone_otp(identifier)
+                else:
+                    send_email_otp(identifier)
+                st.success("OTP resent!")
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("← Use different contact", use_container_width=True):
+                st.session_state.login_step = "identifier"
+                st.rerun()
 
     st.markdown("""
     <div style="text-align:center;margin-top:28px;padding-top:20px;border-top:1px solid #0f1f38;">

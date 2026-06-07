@@ -46,6 +46,12 @@ def init_db():
             created_at      TEXT NOT NULL,
             expires_at      TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS tenant_credentials (
+            tenant_id     TEXT PRIMARY KEY,
+            username      TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at    TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS audit_log (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             tenant_id       TEXT,
@@ -100,44 +106,55 @@ def send_phone_otp(phone: str) -> bool:
         print(f"\n🔑 OTP for {phone}: {otp}  (valid 10 min)\n")
         return True
 
-def send_email_otp(email: str) -> bool:
+def send_email_otp(email: str) -> tuple[bool, str]:
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
+
+    smtp_host     = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port     = int(os.getenv("SMTP_PORT", 465))
+    sender_email  = os.getenv("SENDER_EMAIL", "")
+    sender_pass   = os.getenv("SENDER_PASSWORD", "")
+
+    # ✅ Fail fast if credentials aren't configured
+    if not sender_email or not sender_pass:
+        return False, "Email credentials not configured (SENDER_EMAIL / SENDER_PASSWORD missing)"
+
     otp = _store_otp(email)
+
+    msg            = MIMEMultipart("alternative")
+    msg["Subject"] = "Your TechXdigisolutions Login OTP"
+    msg["From"]    = sender_email
+    msg["To"]      = email
+
+    html = f"""
+    <html><body style="font-family:Arial,sans-serif;padding:30px;background:#07090f;">
+        <div style="max-width:480px;margin:auto;background:#111827;
+                    border-radius:16px;padding:32px;border:1px solid #1e2d45;">
+            <h2 style="color:#6366f1;text-align:center;">TechXdigisolutions</h2>
+            <p style="color:#94a3b8;text-align:center;">Your login OTP is:</p>
+            <div style="font-size:2.5rem;font-weight:900;color:#6366f1;
+                        letter-spacing:12px;padding:24px;background:#0b0f1a;
+                        border-radius:12px;text-align:center;
+                        border:1px solid #1e2d45;">{otp}</div>
+            <p style="color:#475569;text-align:center;margin-top:20px;font-size:0.85rem;">
+                Valid for 10 minutes. Do not share this with anyone.
+            </p>
+        </div>
+    </body></html>"""
+    msg.attach(MIMEText(html, "html"))
+
     try:
-        msg            = MIMEMultipart("alternative")
-        msg["Subject"] = "Your TechXdigisolutions Login OTP"
-        msg["From"]    = os.getenv("SENDER_EMAIL", "")
-        msg["To"]      = email
-        html = f"""
-        <html><body style="font-family:Arial,sans-serif;padding:30px;background:#07090f;">
-            <div style="max-width:480px;margin:auto;background:#111827;
-                        border-radius:16px;padding:32px;border:1px solid #1e2d45;">
-                <h2 style="color:#6366f1;text-align:center;">TechXdigisolutions</h2>
-                <p style="color:#94a3b8;text-align:center;">Your login OTP is:</p>
-                <div style="font-size:2.5rem;font-weight:900;color:#6366f1;
-                            letter-spacing:12px;padding:24px;background:#0b0f1a;
-                            border-radius:12px;text-align:center;
-                            border:1px solid #1e2d45;">{otp}</div>
-                <p style="color:#475569;text-align:center;margin-top:20px;
-                          font-size:0.85rem;">
-                    Valid for 10 minutes. Do not share this with anyone.
-                </p>
-            </div>
-        </body></html>"""
-        msg.attach(MIMEText(html, "html"))
-        with smtplib.SMTP_SSL(
-            os.getenv("SMTP_HOST", "smtp.gmail.com"),
-            int(os.getenv("SMTP_PORT", 465))
-        ) as server:
-            server.login(os.getenv("SENDER_EMAIL", ""),
-                         os.getenv("SENDER_PASSWORD", ""))
-            server.sendmail(os.getenv("SENDER_EMAIL", ""), email, msg.as_string())
-        return True
+        with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
+            server.login(sender_email, sender_pass)
+            server.sendmail(sender_email, email, msg.as_string())
+        return True, ""
+    except smtplib.SMTPAuthenticationError:
+        return False, "SMTP authentication failed — check SENDER_EMAIL and SENDER_PASSWORD (Gmail needs an App Password)"
+    except smtplib.SMTPConnectError:
+        return False, f"Could not connect to SMTP server {smtp_host}:{smtp_port}"
     except Exception as e:
-        print(f"\n🔑 EMAIL OTP for {email}: {otp}  (valid 10 min)\n")
-        return True
+        return False, f"Email send failed: {str(e)}"
 
 def verify_otp(identifier: str, entered_otp: str) -> tuple[bool, str]:
     conn = get_db()
@@ -215,3 +232,54 @@ def get_tenant_by_identifier(identifier: str) -> dict | None:
     """, (identifier, identifier)).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def set_tenant_password(tenant_id: str, username: str, plain_password: str) -> tuple[bool, str]:
+    import bcrypt
+    if len(plain_password) < 8:
+        return False, "Password must be at least 8 characters."
+    hashed = bcrypt.hashpw(plain_password.encode(), bcrypt.gensalt()).decode()
+    try:
+        conn = get_db()
+        conn.execute("""
+            INSERT OR REPLACE INTO tenant_credentials
+            (tenant_id, username, password_hash, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (tenant_id, username.strip().lower(), hashed, datetime.utcnow().isoformat()))
+        conn.commit()
+        conn.close()
+        return True, "Credentials set successfully."
+    except Exception as e:
+        return False, str(e)
+
+
+def verify_password_login(username: str, plain_password: str) -> tuple[dict | None, str]:
+    import bcrypt
+    conn = get_db()
+    row = conn.execute("""
+        SELECT tc.tenant_id, tc.password_hash,
+               t.company_name, t.hr_name, t.email, t.plan,
+               t.is_active, t.is_paid, t.resumes_used,
+               t.resumes_limit, t.expires_at
+        FROM tenant_credentials tc
+        JOIN tenants t ON tc.tenant_id = t.id
+        WHERE tc.username = ?
+    """, (username.strip().lower(),)).fetchone()
+    conn.close()
+
+    if not row:
+        return None, "Invalid username or password."
+    if not row["is_active"]:
+        return None, "Account suspended. Contact TechXdigisolutions."
+    if datetime.fromisoformat(row["expires_at"]) < datetime.utcnow():
+        return None, "Subscription expired. Contact TechXdigisolutions."
+
+    try:
+        match = bcrypt.checkpw(plain_password.encode(), row["password_hash"].encode())
+    except Exception:
+        return None, "Authentication error."
+
+    if not match:
+        return None, "Invalid username or password."
+
+    return dict(row), ""

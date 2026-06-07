@@ -1,8 +1,6 @@
 from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from config import settings
+from app.core.config import settings
 
 llm = ChatGroq(model=settings.model_name, api_key=settings.groq_api_key, temperature=0)
 

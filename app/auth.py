@@ -1,4 +1,15 @@
 import os
+import bcrypt  # pip install bcrypt
+
+# Add this table to init_db() inside the executescript:
+"""
+CREATE TABLE IF NOT EXISTS tenant_credentials (
+    tenant_id    TEXT PRIMARY KEY,
+    username     TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+);
+"""
 from dotenv import load_dotenv
 load_dotenv("/Users/ankushsaxena/talent-intelligence-system/.env")
 import sqlite3
