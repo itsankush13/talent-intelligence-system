@@ -1,3 +1,7 @@
 [server]
-headless = false
-port = 8501
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+
+[theme]
+base = "dark"
