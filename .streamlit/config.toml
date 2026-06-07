@@ -1,7 +1,6 @@
 [server]
 headless = true
-enableCORS = false
-enableXsrfProtection = false
+port = 8501
 
-[theme]
-base = "dark"
+[runtime]
+pythonVersion = "3.11"
