@@ -1,8 +1,10 @@
+import os
+from dotenv import load_dotenv
+load_dotenv("/Users/ankushsaxena/talent-intelligence-system/.env")
 import sqlite3
 import secrets
 import hashlib
 import random
-import os
 from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(
@@ -97,7 +99,7 @@ def send_phone_otp(phone: str) -> bool:
         return True
     except Exception as e:
         otp = _store_otp(phone)
-        print(f"\n🔑 OTP for {phone}: {otp}  (valid 10 min)\n")
+        print(f"\n🔑 TWILIO FALLBACK OTP for {phone}: {otp}  (valid 10 min)\n")
         return True
 
 def send_email_otp(email: str) -> bool:
@@ -136,7 +138,7 @@ def send_email_otp(email: str) -> bool:
             server.sendmail(os.getenv("SENDER_EMAIL", ""), email, msg.as_string())
         return True
     except Exception as e:
-        print(f"\n🔑 EMAIL OTP for {email}: {otp}  (valid 10 min)\n")
+        print(f"\n🔑 EMAIL FALLBACK OTP for {email}: {otp}  (valid 10 min)\n")
         return True
 
 def verify_otp(identifier: str, entered_otp: str) -> tuple[bool, str]:
@@ -185,20 +187,27 @@ def validate_session(token: str) -> dict | None:
     if not token:
         return None
     conn = get_db()
+    # Explicitly aliasing selections to guarantee dictionary parsing key uniformity
     row  = conn.execute("""
-        SELECT s.tenant_id, s.expires_at,
-               t.company_name, t.hr_name, t.plan,
-               t.is_active, t.is_paid,
-               t.resumes_used, t.resumes_limit,
-               t.expires_at as sub_expires
+        SELECT s.tenant_id, 
+               s.expires_at AS session_expires_at,
+               t.company_name, 
+               t.hr_name, 
+               t.plan,
+               t.is_active, 
+               t.is_paid,
+               t.resumes_used, 
+               t.resumes_limit,
+               t.expires_at AS sub_expires
         FROM sessions s
         JOIN tenants t ON s.tenant_id = t.id
         WHERE s.session_token=?
     """, (token,)).fetchone()
     conn.close()
+    
     if not row:
         return None
-    if datetime.fromisoformat(row["expires_at"]) < datetime.utcnow():
+    if datetime.fromisoformat(row["session_expires_at"]) < datetime.utcnow():
         return None
     if not row["is_active"]:
         return None

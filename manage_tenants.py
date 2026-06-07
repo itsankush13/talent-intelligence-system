@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 DB_PATH = "tenants.db"
 
 PLAN_LIMITS = {
+    "admin":        {"resumes": 999999, "days": 3650, "price": 0},
     "trial":       {"resumes": 4,      "days": 2,    "price": 0,
                     "pdf_reports": 0,   "chatbot_answers": 0,
                     "pdf_free": False,  "chatbot_free": False},
@@ -18,8 +19,8 @@ PLAN_LIMITS = {
 
 # Per-use pricing in rupees
 PER_USE_PRICING = {
-    "pdf_report":      75,   # ₹50 per PDF
-    "chatbot_answer":  50,   # ₹15 per chatbot answer
+    "pdf_report":      50,   # ₹50 per PDF
+    "chatbot_answer":  15,   # ₹15 per chatbot answer
 }
 
 def get_db():
@@ -213,13 +214,9 @@ if __name__ == "__main__":
     parser.add_argument("--email",    type=str, default="")
     parser.add_argument("--phone",    type=str, default="")
     parser.add_argument("--plan",     type=str, default="trial",
-                        choices=["trial","starter","growth","enterprise"])
+                    choices=["trial","six_months","twelve_months"])
     parser.add_argument("--months",   type=int, default=1)
     parser.add_argument("--reason",   type=str, default="Non-payment")
-    parser.add_argument("--add-credits",   action="store_true")
-    parser.add_argument("--show-wallet",   action="store_true")
-    parser.add_argument("--show-usage",    action="store_true")
-    parser.add_argument("--amount",        type=int, default=0)
     args = parser.parse_args()
 
     if args.add:
@@ -234,12 +231,6 @@ if __name__ == "__main__":
         confirm_payment(args.email, args.plan, args.months)
     elif args.check_expired:
         check_expired()
-    elif args.add_credits:
-        add_wallet_credits(args.email, args.amount)
-    elif args.show_wallet:
-        show_wallet(args.email)
-    elif args.show_usage:
-        show_usage(args.email)
     else:
         parser.print_help()
 
@@ -295,48 +286,3 @@ def charge_feature(tenant_id: str, feature: str) -> tuple[bool, str]:
     conn.close()
     log_action(tenant_id, "CHARGED", f"{feature} ₹{cost}")
     return True, f"₹{cost} charged for {feature}"
-def show_wallet(email: str):
-    """Show wallet balance for a company."""
-    conn = get_db()
-    tenant = conn.execute(
-        "SELECT id, company_name, plan FROM tenants WHERE email=?",
-        (email,)
-    ).fetchone()
-    if not tenant:
-        print(f"❌ No tenant found for {email}")
-        conn.close()
-        return
-    balance = get_wallet_balance(tenant["id"])
-    print(f"\n💳 Wallet: {tenant['company_name']}")
-    print(f"   Plan:    {tenant['plan']}")
-    print(f"   Balance: ₹{balance}")
-    conn.close()
-
-def show_usage(email: str):
-    """Show usage history for a company."""
-    conn = get_db()
-    tenant = conn.execute(
-        "SELECT id, company_name FROM tenants WHERE email=?",
-        (email,)
-    ).fetchone()
-    if not tenant:
-        print(f"❌ No tenant found for {email}")
-        conn.close()
-        return
-    rows = conn.execute("""
-        SELECT feature, cost_rupees, timestamp
-        FROM usage_log WHERE tenant_id=?
-        ORDER BY timestamp DESC LIMIT 20
-    """, (tenant["id"],)).fetchall()
-    conn.close()
-
-    balance = get_wallet_balance(tenant["id"])
-    total_spent = sum(r["cost_rupees"] for r in rows)
-
-    print(f"\n📊 Usage: {tenant['company_name']}")
-    print(f"   Current Balance: ₹{balance}")
-    print(f"   Total Spent:     ₹{total_spent}")
-    print(f"\n   {'Feature':<20} {'Cost':<8} {'When'}")
-    print("   " + "─" * 55)
-    for r in rows:
-        print(f"   {r['feature']:<20} ₹{r['cost_rupees']:<7} {r['timestamp'][:16]}")
